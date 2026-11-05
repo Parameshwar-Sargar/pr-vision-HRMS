@@ -2,20 +2,16 @@ import mongoose from 'mongoose';
 
 const leaveTypeSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     name: {
       type: String,
       required: true,
+      unique: true,
       trim: true,
     },
     code: {
       type: String,
       required: true,
+      unique: true,
       trim: true,
       uppercase: true,
     },
@@ -32,9 +28,18 @@ const leaveTypeSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    isEncashable: {
+      type: Boolean,
+      default: false,
+    },
     requiresApproval: {
       type: Boolean,
       default: true,
+    },
+    accrualFrequency: {
+      type: String,
+      enum: ['Yearly', 'Monthly', 'Quarterly'],
+      default: 'Yearly',
     },
     isActive: {
       type: Boolean,
@@ -46,7 +51,4 @@ const leaveTypeSchema = new mongoose.Schema(
   }
 );
 
-leaveTypeSchema.index({ tenantId: 1, code: 1 }, { unique: true });
-
 export default mongoose.model('LeaveType', leaveTypeSchema);
-

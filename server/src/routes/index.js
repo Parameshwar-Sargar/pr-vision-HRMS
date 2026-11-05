@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import authRoutes from '../modules/auth/authRoutes.js';
-import superAdminRoutes from '../modules/superAdmin/superAdminRoutes.js';
-import tenantRoutes from '../modules/tenants/tenantRoutes.js';
+import organizationRoutes from '../modules/organization/organizationRoutes.js';
 import dashboardRoutes from '../modules/dashboard/dashboardRoutes.js';
 import employeeRoutes from '../modules/employees/employeeRoutes.js';
 import departmentRoutes from '../modules/departments/departmentRoutes.js';
@@ -13,10 +12,15 @@ import holidayRoutes from '../modules/holidays/holidayRoutes.js';
 import payrollRoutes from '../modules/payroll/payrollRoutes.js';
 import recruitmentRoutes from '../modules/recruitment/recruitmentRoutes.js';
 import performanceRoutes from '../modules/performance/performanceRoutes.js';
+import trainingRoutes from '../modules/training/trainingRoutes.js';
+import expenseRoutes from '../modules/expenses/expenseRoutes.js';
+import assetRoutes from '../modules/assets/assetRoutes.js';
+import grievanceRoutes from '../modules/grievances/grievanceRoutes.js';
+import announcementRoutes from '../modules/announcements/announcementRoutes.js';
 import documentRoutes from '../modules/documents/documentRoutes.js';
 import notificationRoutes from '../modules/notifications/notificationRoutes.js';
 import reportRoutes from '../modules/reports/reportRoutes.js';
-import subscriptionRoutes from '../modules/subscriptions/subscriptionRoutes.js';
+import systemRoutes from '../modules/system/systemRoutes.js';
 
 const router = Router();
 
@@ -30,9 +34,9 @@ router.get('/health', (req, res) => {
   });
 });
 
+// Enterprise Routes
 router.use('/auth', authRoutes);
-router.use('/super-admin', superAdminRoutes);
-router.use('/tenants', tenantRoutes);
+router.use('/organization', organizationRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/employees', employeeRoutes);
 router.use('/departments', departmentRoutes);
@@ -44,10 +48,14 @@ router.use('/holidays', holidayRoutes);
 router.use('/payroll', payrollRoutes);
 router.use('/recruitment', recruitmentRoutes);
 router.use('/performance', performanceRoutes);
+router.use('/training', trainingRoutes);
+router.use('/expenses', expenseRoutes);
+router.use('/assets', assetRoutes);
+router.use('/grievances', grievanceRoutes);
+router.use('/announcements', announcementRoutes);
 router.use('/documents', documentRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/reports', reportRoutes);
-router.use('/subscriptions', subscriptionRoutes);
+router.use('/system', systemRoutes);
 
 export default router;
-

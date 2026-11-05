@@ -2,12 +2,6 @@ import mongoose from 'mongoose';
 
 const candidateSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     jobOpeningId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'JobOpening',
@@ -53,12 +47,6 @@ const candidateSchema = new mongoose.Schema(
       enum: ['Applied', 'Screening', 'Interviewing', 'Offered', 'Hired', 'Rejected'],
       default: 'Applied',
     },
-    interviewSchedule: {
-      scheduledDate: Date,
-      interviewer: String,
-      round: String,
-      feedback: String,
-    },
     rating: {
       type: Number,
       min: 1,
@@ -68,6 +56,11 @@ const candidateSchema = new mongoose.Schema(
     notes: {
       type: String,
       default: '',
+    },
+    convertedToEmployeeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Employee',
+      default: null,
     },
     appliedDate: {
       type: Date,
@@ -79,8 +72,7 @@ const candidateSchema = new mongoose.Schema(
   }
 );
 
-candidateSchema.index({ tenantId: 1, jobOpeningId: 1, status: 1 });
-candidateSchema.index({ tenantId: 1, email: 1 });
+candidateSchema.index({ jobOpeningId: 1, status: 1 });
+candidateSchema.index({ email: 1 });
 
 export default mongoose.model('Candidate', candidateSchema);
-

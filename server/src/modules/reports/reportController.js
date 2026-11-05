@@ -6,16 +6,21 @@ import { sendSuccess } from '../../utils/responseUtils.js';
 
 export const getEmployeeReport = async (req, res, next) => {
   try {
-    const { format } = req.query;
-    const employees = await Employee.find({ tenantId: req.tenantId, isDeleted: false })
+    const { format, branchId, departmentId } = req.query;
+    const filter = { isDeleted: false };
+    if (branchId) filter.branchId = branchId;
+    if (departmentId) filter.departmentId = departmentId;
+
+    const employees = await Employee.find(filter)
       .populate('departmentId', 'name')
       .populate('designationId', 'title')
+      .populate('branchId', 'name code')
       .sort({ employeeId: 1 });
 
     if (format === 'csv') {
-      let csv = 'Employee ID,First Name,Last Name,Email,Department,Designation,Status,Joining Date\n';
+      let csv = 'Employee ID,First Name,Last Name,Email,Branch,Department,Designation,Status,Joining Date\n';
       employees.forEach((e) => {
-        csv += `"${e.employeeId}","${e.firstName}","${e.lastName}","${e.email}","${e.departmentId?.name || ''}","${e.designationId?.title || ''}","${e.employmentStatus}","${new Date(e.joiningDate).toISOString().split('T')[0]}"\n`;
+        csv += `"${e.employeeId}","${e.firstName}","${e.lastName}","${e.email}","${e.branchId?.name || 'HQ'}","${e.departmentId?.name || ''}","${e.designationId?.title || ''}","${e.employmentStatus}","${e.joiningDate ? new Date(e.joiningDate).toISOString().split('T')[0] : ''}"\n`;
       });
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', 'attachment; filename="employee-report.csv"');
@@ -31,7 +36,7 @@ export const getEmployeeReport = async (req, res, next) => {
 export const getAttendanceReport = async (req, res, next) => {
   try {
     const { startDate, endDate, format } = req.query;
-    const query = { tenantId: req.tenantId };
+    const query = {};
 
     if (startDate && endDate) {
       query.date = {
@@ -63,7 +68,7 @@ export const getAttendanceReport = async (req, res, next) => {
 export const getPayrollReport = async (req, res, next) => {
   try {
     const { month, year, format } = req.query;
-    const query = { tenantId: req.tenantId };
+    const query = {};
     if (month) query.month = parseInt(month, 10);
     if (year) query.year = parseInt(year, 10);
 
@@ -86,4 +91,3 @@ export const getPayrollReport = async (req, res, next) => {
     next(error);
   }
 };
-

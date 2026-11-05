@@ -20,7 +20,7 @@ const leaveApplySchema = z.object({
  */
 export const getLeaveTypes = async (req, res, next) => {
   try {
-    const leaveTypes = await LeaveType.find({ tenantId: req.tenantId, isActive: true });
+    const leaveTypes = await LeaveType.find({ isActive: true });
     return sendSuccess(res, 'Leave types retrieved.', { leaveTypes });
   } catch (error) {
     next(error);
@@ -32,14 +32,14 @@ export const getLeaveTypes = async (req, res, next) => {
  */
 export const createLeaveType = async (req, res, next) => {
   try {
-    const { name, code, defaultDaysPerYear, isPaid, requiresApproval } = req.body;
+    const { name, code, defaultDaysPerYear, isPaid, requiresApproval, accrualFrequency } = req.body;
     const leaveType = await LeaveType.create({
-      tenantId: req.tenantId,
       name,
       code: code.toUpperCase(),
       defaultDaysPerYear: Number(defaultDaysPerYear) || 12,
       isPaid: isPaid ?? true,
       requiresApproval: requiresApproval ?? true,
+      accrualFrequency: accrualFrequency || 'Yearly',
     });
     return sendSuccess(res, 'Leave type created.', { leaveType }, 201);
   } catch (error) {
@@ -52,27 +52,24 @@ export const createLeaveType = async (req, res, next) => {
  */
 export const getLeaveBalances = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     let targetEmployeeId = req.query.employeeId;
 
     if (!targetEmployeeId || req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ tenantId, userId: req.user._id });
+      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
       if (!myEmp) return sendSuccess(res, 'No employee record found.', { balances: [] });
       targetEmployeeId = myEmp._id;
     }
 
     const currentYear = new Date().getFullYear();
     let balanceDoc = await LeaveBalance.findOne({
-      tenantId,
       employeeId: targetEmployeeId,
       year: currentYear,
     }).populate('balances.leaveTypeId');
 
     if (!balanceDoc) {
       // Auto-initialize if not existing
-      const leaveTypes = await LeaveType.find({ tenantId, isActive: true });
+      const leaveTypes = await LeaveType.find({ isActive: true });
       balanceDoc = await LeaveBalance.create({
-        tenantId,
         employeeId: targetEmployeeId,
         year: currentYear,
         balances: leaveTypes.map((lt) => ({
@@ -97,10 +94,9 @@ export const getLeaveBalances = async (req, res, next) => {
  */
 export const applyLeave = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const validated = leaveApplySchema.parse(req.body);
 
-    const employee = await Employee.findOne({ tenantId, userId: req.user._id, isDeleted: false });
+    const employee = await Employee.findOne({ userId: req.user._id, isDeleted: false });
     if (!employee) {
       return sendError(res, 'Employee profile not found.', [], 400);
     }
@@ -114,12 +110,9 @@ export const applyLeave = async (req, res, next) => {
 
     // 1. Prevent overlapping leaves
     const overlap = await LeaveRequest.findOne({
-      tenantId,
       employeeId: employee._id,
       status: { $in: [LEAVE_STATUS.PENDING, LEAVE_STATUS.APPROVED] },
-      $or: [
-        { startDate: { $lte: end }, endDate: { $gte: start } },
-      ],
+      $or: [{ startDate: { $lte: end }, endDate: { $gte: start } }],
     });
 
     if (overlap) {
@@ -134,7 +127,6 @@ export const applyLeave = async (req, res, next) => {
     // 2. Check balance
     const currentYear = start.getFullYear();
     let balanceDoc = await LeaveBalance.findOne({
-      tenantId,
       employeeId: employee._id,
       year: currentYear,
     });
@@ -151,7 +143,6 @@ export const applyLeave = async (req, res, next) => {
           400
         );
       }
-      // Update pending
       if (item) {
         item.pending += validated.totalDays;
         await balanceDoc.save();
@@ -160,7 +151,6 @@ export const applyLeave = async (req, res, next) => {
 
     // 3. Create request
     const leaveRequest = await LeaveRequest.create({
-      tenantId,
       employeeId: employee._id,
       leaveTypeId: validated.leaveTypeId,
       startDate: start,
@@ -189,10 +179,9 @@ export const applyLeave = async (req, res, next) => {
  */
 export const getLeaveRequests = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const { status, employeeId, page = 1, limit = 20 } = req.query;
 
-    const query = { tenantId };
+    const query = {};
 
     if (status) {
       query.status = status;
@@ -200,14 +189,13 @@ export const getLeaveRequests = async (req, res, next) => {
 
     // Filter by role
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ tenantId, userId: req.user._id });
+      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
       if (!myEmp) return sendSuccess(res, 'No records', { requests: [] });
       query.employeeId = myEmp._id;
     } else if (req.user.role === ROLES.MANAGER) {
-      // Manager sees team leave requests
-      const myEmp = await Employee.findOne({ tenantId, userId: req.user._id });
+      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
       if (myEmp) {
-        const teamEmployees = await Employee.find({ tenantId, managerId: myEmp._id }).select('_id');
+        const teamEmployees = await Employee.find({ managerId: myEmp._id, isDeleted: false }).select('_id');
         query.employeeId = { $in: teamEmployees.map((e) => e._id) };
       }
     } else if (employeeId) {
@@ -217,12 +205,12 @@ export const getLeaveRequests = async (req, res, next) => {
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const total = await LeaveRequest.countDocuments(query);
     const requests = await LeaveRequest.find(query)
-      .sort({ appliedAt: -1 })
+      .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit, 10))
       .populate('employeeId', 'firstName lastName employeeId departmentId')
       .populate('leaveTypeId', 'name code isPaid')
-      .populate('reviewedBy', 'name email');
+      .populate('reviewedBy', 'email');
 
     return sendSuccess(res, 'Leave requests retrieved.', {
       requests,
@@ -243,13 +231,13 @@ export const getLeaveRequests = async (req, res, next) => {
 export const reviewLeaveRequest = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { status, remarks } = req.body; // 'Approved' or 'Rejected'
+    const { status, remarks } = req.body;
 
     if (![LEAVE_STATUS.APPROVED, LEAVE_STATUS.REJECTED].includes(status)) {
       return sendError(res, "Status must be either 'Approved' or 'Rejected'.", [], 400);
     }
 
-    const leaveRequest = await LeaveRequest.findOne({ _id: id, tenantId: req.tenantId }).populate('leaveTypeId');
+    const leaveRequest = await LeaveRequest.findById(id).populate('leaveTypeId');
     if (!leaveRequest) {
       return sendError(res, 'Leave request not found.', [], 404);
     }
@@ -267,7 +255,6 @@ export const reviewLeaveRequest = async (req, res, next) => {
     // Adjust Leave Balance
     const year = new Date(leaveRequest.startDate).getFullYear();
     const balanceDoc = await LeaveBalance.findOne({
-      tenantId: req.tenantId,
       employeeId: leaveRequest.employeeId,
       year,
     });
@@ -299,4 +286,3 @@ export const reviewLeaveRequest = async (req, res, next) => {
     next(error);
   }
 };
-

@@ -3,7 +3,7 @@ import SalaryStructure from '../../models/SalaryStructure.js';
 import PayrollRun from '../../models/PayrollRun.js';
 import Payslip from '../../models/Payslip.js';
 import Employee from '../../models/Employee.js';
-import Tenant from '../../models/Tenant.js';
+import CompanySettings from '../../models/CompanySettings.js';
 import { PAYROLL_STATUS, ROLES } from '../../config/constants.js';
 import { sendSuccess, sendError } from '../../utils/responseUtils.js';
 import { generatePayslipPDF } from '../../utils/pdfGenerator.js';
@@ -45,7 +45,6 @@ export const getSalaryStructure = async (req, res, next) => {
   try {
     const { employeeId } = req.params;
     const structure = await SalaryStructure.findOne({
-      tenantId: req.tenantId,
       employeeId,
       isActive: true,
     }).populate('employeeId', 'firstName lastName employeeId email');
@@ -62,12 +61,11 @@ export const saveSalaryStructure = async (req, res, next) => {
 
     // Deactivate previous active structures for this employee
     await SalaryStructure.updateMany(
-      { tenantId: req.tenantId, employeeId: validated.employeeId },
+      { employeeId: validated.employeeId },
       { isActive: false }
     );
 
     const structure = await SalaryStructure.create({
-      tenantId: req.tenantId,
       employeeId: validated.employeeId,
       basicSalary: validated.basicSalary,
       hra: validated.hra,
@@ -96,21 +94,19 @@ export const saveSalaryStructure = async (req, res, next) => {
  */
 export const generatePayrollRun = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const { month, year, notes } = req.body;
 
     const parsedMonth = parseInt(month, 10);
     const parsedYear = parseInt(year, 10);
 
     // Check if run already exists
-    let run = await PayrollRun.findOne({ tenantId, month: parsedMonth, year: parsedYear });
+    let run = await PayrollRun.findOne({ month: parsedMonth, year: parsedYear });
     if (run && run.status === PAYROLL_STATUS.PAID) {
       return sendError(res, `Payroll for ${parsedMonth}/${parsedYear} is already marked as Paid and finalized.`, [], 400);
     }
 
     if (!run) {
       run = await PayrollRun.create({
-        tenantId,
         month: parsedMonth,
         year: parsedYear,
         status: PAYROLL_STATUS.PROCESSING,
@@ -119,13 +115,13 @@ export const generatePayrollRun = async (req, res, next) => {
       });
     } else {
       // Clear previous draft payslips to regenerate fresh
-      await Payslip.deleteMany({ tenantId, payrollRunId: run._id });
+      await Payslip.deleteMany({ payrollRunId: run._id });
       run.status = PAYROLL_STATUS.PROCESSING;
       await run.save();
     }
 
-    // Find all active employees in this tenant
-    const activeEmployees = await Employee.find({ tenantId, isDeleted: false, employmentStatus: 'Active' });
+    // Find all active employees
+    const activeEmployees = await Employee.find({ isDeleted: false, employmentStatus: 'Active' });
 
     let runTotalGross = 0;
     let runTotalDeductions = 0;
@@ -133,8 +129,7 @@ export const generatePayrollRun = async (req, res, next) => {
     let count = 0;
 
     for (const emp of activeEmployees) {
-      // Find salary structure
-      const salary = await SalaryStructure.findOne({ tenantId, employeeId: emp._id, isActive: true });
+      const salary = await SalaryStructure.findOne({ employeeId: emp._id, isActive: true });
       if (!salary) continue;
 
       const basic = salary.basicSalary || 0;
@@ -143,7 +138,6 @@ export const generatePayrollRun = async (req, res, next) => {
         { name: 'Special Allowance', amount: salary.specialAllowance || 0 },
       ];
 
-      // Add custom earnings
       for (const comp of salary.customComponents || []) {
         if (comp.type === 'earning') {
           let amt = comp.value;
@@ -156,7 +150,6 @@ export const generatePayrollRun = async (req, res, next) => {
 
       const gross = basic + earnings.reduce((sum, item) => sum + item.amount, 0);
 
-      // Deductions
       const deductions = [];
       const { pfEnabled, pfEmployeeRate, esiEnabled, esiEmployeeRate, professionalTax, tdsDeduction } =
         salary.statutoryConfig || {};
@@ -179,7 +172,6 @@ export const generatePayrollRun = async (req, res, next) => {
         deductions.push({ name: 'Tax Deducted at Source (TDS)', amount: tdsDeduction });
       }
 
-      // Add custom deductions
       for (const comp of salary.customComponents || []) {
         if (comp.type === 'deduction') {
           let amt = comp.value;
@@ -196,7 +188,6 @@ export const generatePayrollRun = async (req, res, next) => {
       const payslipNumber = `PS-${parsedYear}${String(parsedMonth).padStart(2, '0')}-${emp.employeeId}`;
 
       await Payslip.create({
-        tenantId,
         payrollRunId: run._id,
         employeeId: emp._id,
         month: parsedMonth,
@@ -223,7 +214,7 @@ export const generatePayrollRun = async (req, res, next) => {
     run.totalGrossSalary = runTotalGross;
     run.totalDeductions = runTotalDeductions;
     run.totalNetSalary = runTotalNet;
-    run.status = PAYROLL_STATUS.APPROVED; // ready for payout
+    run.status = PAYROLL_STATUS.APPROVED;
     await run.save();
 
     await logAudit({
@@ -245,10 +236,10 @@ export const generatePayrollRun = async (req, res, next) => {
  */
 export const getPayrollRuns = async (req, res, next) => {
   try {
-    const runs = await PayrollRun.find({ tenantId: req.tenantId })
+    const runs = await PayrollRun.find()
       .sort({ year: -1, month: -1 })
-      .populate('processedBy', 'name email')
-      .populate('approvedBy', 'name email');
+      .populate('processedBy', 'email')
+      .populate('approvedBy', 'email');
 
     return sendSuccess(res, 'Payroll runs retrieved.', { runs });
   } catch (error) {
@@ -262,7 +253,7 @@ export const getPayrollRuns = async (req, res, next) => {
 export const markPayrollPaid = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const run = await PayrollRun.findOne({ _id: id, tenantId: req.tenantId });
+    const run = await PayrollRun.findById(id);
 
     if (!run) {
       return sendError(res, 'Payroll run not found.', [], 404);
@@ -275,7 +266,7 @@ export const markPayrollPaid = async (req, res, next) => {
 
     // Update all payslips in this run to Paid
     await Payslip.updateMany(
-      { tenantId: req.tenantId, payrollRunId: run._id },
+      { payrollRunId: run._id },
       { paymentStatus: 'Paid', paymentDate: new Date() }
     );
 
@@ -298,14 +289,13 @@ export const markPayrollPaid = async (req, res, next) => {
  */
 export const getPayslips = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const { employeeId, month, year, page = 1, limit = 20 } = req.query;
 
-    const query = { tenantId };
+    const query = {};
 
     // Employee isolation: Employees only see their own payslips
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ tenantId, userId: req.user._id });
+      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
       if (!myEmp) return sendSuccess(res, 'No employee record found.', { payslips: [] });
       query.employeeId = myEmp._id;
     } else if (employeeId) {
@@ -337,21 +327,19 @@ export const getPayslips = async (req, res, next) => {
 };
 
 /**
- * Download Payslip as PDF (with role & tenant verification)
+ * Download Payslip as PDF
  */
 export const downloadPayslipPDF = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const tenantId = req.tenantId;
 
-    const payslip = await Payslip.findOne({ _id: id, tenantId });
+    const payslip = await Payslip.findById(id);
     if (!payslip) {
       return sendError(res, 'Payslip not found.', [], 404);
     }
 
-    // Tenant employee authorization check
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ tenantId, userId: req.user._id });
+      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
       if (!myEmp || payslip.employeeId.toString() !== myEmp._id.toString()) {
         return sendError(res, 'Access denied. You cannot access another employee’s payslip.', [], 403);
       }
@@ -359,11 +347,12 @@ export const downloadPayslipPDF = async (req, res, next) => {
 
     const employee = await Employee.findById(payslip.employeeId)
       .populate('departmentId')
-      .populate('designationId');
+      .populate('designationId')
+      .populate('branchId');
 
-    const tenant = await Tenant.findById(tenantId);
+    const company = await CompanySettings.findOne();
 
-    const pdfBuffer = await generatePayslipPDF({ payslip, employee, tenant });
+    const pdfBuffer = await generatePayslipPDF({ payslip, employee, company });
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${payslip.payslipNumber}.pdf"`);
@@ -374,4 +363,3 @@ export const downloadPayslipPDF = async (req, res, next) => {
     next(error);
   }
 };
-

@@ -51,7 +51,6 @@ const branchSchema = new mongoose.Schema(
   }
 );
 
-branchSchema.index({ code: 1 }, { unique: true });
 branchSchema.index({ isDeleted: 1 });
 
 export default mongoose.model('Branch', branchSchema);

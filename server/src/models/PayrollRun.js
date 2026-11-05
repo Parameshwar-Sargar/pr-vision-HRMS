@@ -3,12 +3,6 @@ import { PAYROLL_STATUS } from '../config/constants.js';
 
 const payrollRunSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     month: {
       type: Number,
       required: true,
@@ -51,6 +45,10 @@ const payrollRunSchema = new mongoose.Schema(
     paymentDate: {
       type: Date,
     },
+    isLocked: {
+      type: Boolean,
+      default: false,
+    },
     notes: {
       type: String,
       default: '',
@@ -61,8 +59,7 @@ const payrollRunSchema = new mongoose.Schema(
   }
 );
 
-payrollRunSchema.index({ tenantId: 1, month: 1, year: 1 }, { unique: true });
-payrollRunSchema.index({ tenantId: 1, status: 1 });
+payrollRunSchema.index({ month: 1, year: 1 }, { unique: true });
+payrollRunSchema.index({ status: 1 });
 
 export default mongoose.model('PayrollRun', payrollRunSchema);
-

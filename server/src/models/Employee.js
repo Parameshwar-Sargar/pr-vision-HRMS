@@ -84,7 +84,7 @@ const employeeSchema = new mongoose.Schema(
     },
     employmentStatus: {
       type: String,
-      enum: Object.values(LIFECYCLE_STAGES),
+      enum: ['Active', ...Object.values(LIFECYCLE_STAGES)],
       default: LIFECYCLE_STAGES.PROBATION,
     },
     // Lifecycle Tracking
@@ -177,8 +177,6 @@ employeeSchema.virtual('fullName').get(function () {
   return `${this.firstName} ${this.lastName}`.trim();
 });
 
-employeeSchema.index({ employeeId: 1 }, { unique: true });
-employeeSchema.index({ email: 1 }, { unique: true });
 employeeSchema.index({ departmentId: 1 });
 employeeSchema.index({ branchId: 1 });
 employeeSchema.index({ managerId: 1 });

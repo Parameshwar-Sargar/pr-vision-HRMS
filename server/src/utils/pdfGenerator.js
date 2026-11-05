@@ -3,7 +3,7 @@ import PDFDocument from 'pdfkit';
 /**
  * Generate PDF buffer for an employee payslip
  */
-export const generatePayslipPDF = async ({ payslip, employee, tenant }) => {
+export const generatePayslipPDF = async ({ payslip, employee, company }) => {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ margin: 40, size: 'A4' });
@@ -15,20 +15,27 @@ export const generatePayslipPDF = async ({ payslip, employee, tenant }) => {
         resolve(pdfData);
       });
 
+      const companyName = company?.companyName || 'PR VISION INNOVATIONS';
+      const tagline = company?.tagline || 'People. Process. Performance.';
+      const city = company?.address?.city || 'Bengaluru';
+      const state = company?.address?.state || 'Karnataka';
+      const country = company?.address?.country || 'India';
+      const contactEmail = company?.contactEmail || 'contact@prvision.com';
+
       // Header Banner
       doc
         .fillColor('#1E3A8A')
         .fontSize(20)
         .font('Helvetica-Bold')
-        .text(tenant?.name || 'PR VISION HRMS', 40, 40);
+        .text(companyName, 40, 40);
 
       doc
         .fontSize(10)
         .font('Helvetica')
         .fillColor('#64748B')
-        .text('PR VISION INNOVATIONS SaaS Platform', 40, 65)
-        .text(`${tenant?.address?.city || ''} ${tenant?.address?.state || ''} ${tenant?.address?.country || 'India'}`)
-        .text(`Email: ${tenant?.contactEmail || 'hr@prvision.com'}`);
+        .text(tagline, 40, 65)
+        .text(`${city}, ${state}, ${country}`)
+        .text(`Email: ${contactEmail}`);
 
       doc
         .fillColor('#2563EB')
@@ -127,7 +134,7 @@ export const generatePayslipPDF = async ({ payslip, employee, tenant }) => {
         .fontSize(8)
         .font('Helvetica')
         .fillColor('#94A3B8')
-        .text('This is a computer-generated payslip authorized by PR VISION HRMS SaaS Platform. No physical signature required.', 40, footerY, { align: 'center', width: 515 })
+        .text(`This is a computer-generated payslip authorized by ${companyName}. No physical signature required.`, 40, footerY, { align: 'center', width: 515 })
         .text('Statutory contributions (PF/ESI/PT) subject to regulatory rules as verified by employer.', 40, footerY + 14, { align: 'center', width: 515 });
 
       doc.end();
@@ -136,4 +143,3 @@ export const generatePayslipPDF = async ({ payslip, employee, tenant }) => {
     }
   });
 };
-

@@ -4,9 +4,6 @@ import Shift from '../../models/Shift.js';
 import { ATTENDANCE_STATUS, ROLES } from '../../config/constants.js';
 import { sendSuccess, sendError } from '../../utils/responseUtils.js';
 
-/**
- * Helper to get normalized midnight Date for a given date
- */
 const getDayBoundary = (d = new Date()) => {
   const date = new Date(d);
   const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
@@ -14,16 +11,10 @@ const getDayBoundary = (d = new Date()) => {
   return { start, end };
 };
 
-/**
- * Clock In
- */
 export const checkIn = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const userId = req.user._id;
-
-    // Resolve employee profile
-    const employee = await Employee.findOne({ tenantId, userId, isDeleted: false }).populate('shiftId');
+    const employee = await Employee.findOne({ userId, isDeleted: false }).populate('shiftId');
     if (!employee) {
       return sendError(res, 'No active employee profile linked to your user account.', [], 400);
     }
@@ -31,9 +22,7 @@ export const checkIn = async (req, res, next) => {
     const now = new Date();
     const { start, end } = getDayBoundary(now);
 
-    // Prevent duplicate check-in
     let record = await Attendance.findOne({
-      tenantId,
       employeeId: employee._id,
       date: { $gte: start, $lte: end },
     });
@@ -42,7 +31,6 @@ export const checkIn = async (req, res, next) => {
       return sendError(res, 'You have already checked in for today.', [], 400);
     }
 
-    // Determine status (Late vs Present based on shift)
     let status = ATTENDANCE_STATUS.PRESENT;
     if (employee.shiftId && employee.shiftId.startTime) {
       const [shiftHour, shiftMinute] = employee.shiftId.startTime.split(':').map(Number);
@@ -56,11 +44,13 @@ export const checkIn = async (req, res, next) => {
 
     if (!record) {
       record = await Attendance.create({
-        tenantId,
         employeeId: employee._id,
         date: start,
         checkInTime: now,
         status,
+        shiftId: employee.shiftId?._id || null,
+        branchId: employee.branchId || null,
+        clockMethod: 'Web',
         ipAddress: req.ip,
       });
     } else {
@@ -75,15 +65,10 @@ export const checkIn = async (req, res, next) => {
   }
 };
 
-/**
- * Clock Out
- */
 export const checkOut = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const userId = req.user._id;
-
-    const employee = await Employee.findOne({ tenantId, userId, isDeleted: false }).populate('shiftId');
+    const employee = await Employee.findOne({ userId, isDeleted: false }).populate('shiftId');
     if (!employee) {
       return sendError(res, 'No active employee profile linked to your user account.', [], 400);
     }
@@ -92,7 +77,6 @@ export const checkOut = async (req, res, next) => {
     const { start, end } = getDayBoundary(now);
 
     const record = await Attendance.findOne({
-      tenantId,
       employeeId: employee._id,
       date: { $gte: start, $lte: end },
     });
@@ -107,18 +91,15 @@ export const checkOut = async (req, res, next) => {
 
     record.checkOutTime = now;
 
-    // Calculate total hours
     const diffMs = record.checkOutTime.getTime() - record.checkInTime.getTime();
     const totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10;
     record.totalHours = totalHours;
 
-    // Overtime tracking (standard day = 8h)
     const standardHours = 8;
     if (totalHours > standardHours) {
       record.overtimeHours = Math.round((totalHours - standardHours) * 10) / 10;
     }
 
-    // Half-day check (if less than 4 hours worked)
     if (totalHours < 4) {
       record.status = ATTENDANCE_STATUS.HALF_DAY;
     }
@@ -133,24 +114,21 @@ export const checkOut = async (req, res, next) => {
   }
 };
 
-/**
- * Get Attendance Records (Filtered by employee, date range, or company-wide for HR/Admin)
- */
 export const getAttendance = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
-    const { employeeId, startDate, endDate, status, page = 1, limit = 20 } = req.query;
+    const { employeeId, branchId, startDate, endDate, status, page = 1, limit = 20 } = req.query;
 
-    const query = { tenantId };
+    const query = {};
 
-    // Role-based visibility
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ tenantId, userId: req.user._id });
-      if (!myEmp) return sendSuccess(res, 'No employee record found.', { attendance: [] });
+      const myEmp = await Employee.findOne({ userId: req.user._id });
+      if (!myEmp) return sendSuccess(res, 'No records', { attendance: [] });
       query.employeeId = myEmp._id;
     } else if (employeeId) {
       query.employeeId = employeeId;
     }
+
+    if (branchId) query.branchId = branchId;
 
     if (startDate && endDate) {
       query.date = {
@@ -159,9 +137,7 @@ export const getAttendance = async (req, res, next) => {
       };
     }
 
-    if (status) {
-      query.status = status;
-    }
+    if (status) query.status = status;
 
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const total = await Attendance.countDocuments(query);
@@ -169,7 +145,7 @@ export const getAttendance = async (req, res, next) => {
       .sort({ date: -1 })
       .skip(skip)
       .limit(parseInt(limit, 10))
-      .populate('employeeId', 'firstName lastName employeeId departmentId');
+      .populate('employeeId', 'firstName lastName employeeId departmentId branchId');
 
     return sendSuccess(res, 'Attendance records retrieved.', {
       attendance,
@@ -184,43 +160,53 @@ export const getAttendance = async (req, res, next) => {
   }
 };
 
-/**
- * Submit Attendance Correction Request
- */
-export const submitCorrectionRequest = async (req, res, next) => {
+// Biometric Hardware Integration Architecture Sync Endpoint
+export const syncBiometricLogs = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { requestedCheckIn, requestedCheckOut, reason } = req.body;
-
-    const record = await Attendance.findOne({ _id: id, tenantId: req.tenantId });
-    if (!record) {
-      return sendError(res, 'Attendance record not found.', [], 404);
+    const { logs } = req.body; // Array of { employeeCode, timestamp, deviceId, logType }
+    if (!Array.isArray(logs) || logs.length === 0) {
+      return sendError(res, 'No biometric records supplied for synchronization.', [], 400);
     }
 
-    record.correctionRequest = {
-      isRequested: true,
-      requestedCheckIn: requestedCheckIn ? new Date(requestedCheckIn) : record.checkInTime,
-      requestedCheckOut: requestedCheckOut ? new Date(requestedCheckOut) : record.checkOutTime,
-      reason,
-      status: 'Pending',
-    };
+    let syncedCount = 0;
+    for (const log of logs) {
+      const employee = await Employee.findOne({ employeeId: log.employeeCode, isDeleted: false });
+      if (!employee) continue;
 
-    await record.save();
-    return sendSuccess(res, 'Correction request submitted for approval.', { record });
+      const logTime = new Date(log.timestamp);
+      const { start } = getDayBoundary(logTime);
+
+      let record = await Attendance.findOne({ employeeId: employee._id, date: start });
+      if (!record) {
+        record = await Attendance.create({
+          employeeId: employee._id,
+          date: start,
+          checkInTime: logTime,
+          status: ATTENDANCE_STATUS.PRESENT,
+          clockMethod: 'Biometric',
+          biometricLogId: log.deviceId || 'DEV-BIO-01',
+        });
+      } else if (!record.checkOutTime && logTime > record.checkInTime) {
+        record.checkOutTime = logTime;
+        const diffMs = record.checkOutTime.getTime() - record.checkInTime.getTime();
+        record.totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10;
+        await record.save();
+      }
+      syncedCount++;
+    }
+
+    return sendSuccess(res, `Biometric sync processed. ${syncedCount} punch records evaluated.`, { syncedCount });
   } catch (error) {
     next(error);
   }
 };
 
-/**
- * HR / Admin Manual Attendance Adjustment
- */
 export const adjustAttendance = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { checkInTime, checkOutTime, status, notes } = req.body;
 
-    const record = await Attendance.findOne({ _id: id, tenantId: req.tenantId });
+    const record = await Attendance.findById(id);
     if (!record) {
       return sendError(res, 'Attendance record not found.', [], 404);
     }
@@ -235,15 +221,11 @@ export const adjustAttendance = async (req, res, next) => {
       record.totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10;
     }
 
-    if (record.correctionRequest?.isRequested) {
-      record.correctionRequest.status = 'Approved';
-      record.correctionRequest.reviewedBy = req.user._id;
-    }
-
+    record.clockMethod = 'Manual';
     await record.save();
+
     return sendSuccess(res, 'Attendance adjusted successfully.', { record });
   } catch (error) {
     next(error);
   }
 };
-

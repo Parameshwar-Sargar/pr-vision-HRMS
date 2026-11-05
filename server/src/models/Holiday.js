@@ -2,12 +2,6 @@ import mongoose from 'mongoose';
 
 const holidaySchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     name: {
       type: String,
       required: [true, 'Holiday name is required'],
@@ -21,6 +15,11 @@ const holidaySchema = new mongoose.Schema(
       type: Number,
       required: true,
       default: () => new Date().getFullYear(),
+    },
+    branchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null, // Null = all branches
     },
     description: {
       type: String,
@@ -36,8 +35,7 @@ const holidaySchema = new mongoose.Schema(
   }
 );
 
-holidaySchema.index({ tenantId: 1, date: 1 }, { unique: true });
-holidaySchema.index({ tenantId: 1, year: 1 });
+holidaySchema.index({ date: 1, branchId: 1 }, { unique: true });
+holidaySchema.index({ year: 1 });
 
 export default mongoose.model('Holiday', holidaySchema);
-

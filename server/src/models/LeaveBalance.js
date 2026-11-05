@@ -22,6 +22,10 @@ const balanceItemSchema = new mongoose.Schema(
       required: true,
       default: 0,
     },
+    encashed: {
+      type: Number,
+      default: 0,
+    },
     remaining: {
       type: Number,
       required: true,
@@ -33,12 +37,6 @@ const balanceItemSchema = new mongoose.Schema(
 
 const leaveBalanceSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     employeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
@@ -56,7 +54,6 @@ const leaveBalanceSchema = new mongoose.Schema(
   }
 );
 
-leaveBalanceSchema.index({ tenantId: 1, employeeId: 1, year: 1 }, { unique: true });
+leaveBalanceSchema.index({ employeeId: 1, year: 1 }, { unique: true });
 
 export default mongoose.model('LeaveBalance', leaveBalanceSchema);
-

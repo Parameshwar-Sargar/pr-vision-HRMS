@@ -2,12 +2,6 @@ import mongoose from 'mongoose';
 
 const jobOpeningSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     title: {
       type: String,
       required: [true, 'Job title is required'],
@@ -22,6 +16,10 @@ const jobOpeningSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Designation',
     },
+    branchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+    },
     openingsCount: {
       type: Number,
       default: 1,
@@ -29,7 +27,7 @@ const jobOpeningSchema = new mongoose.Schema(
     },
     location: {
       type: String,
-      default: 'Headquarters / Hybrid',
+      default: 'Bengaluru / Hybrid',
     },
     type: {
       type: String,
@@ -45,6 +43,8 @@ const jobOpeningSchema = new mongoose.Schema(
       required: true,
     },
     requirements: [String],
+    minSalary: { type: Number, default: 0 },
+    maxSalary: { type: Number, default: 0 },
     status: {
       type: String,
       enum: ['Draft', 'Open', 'Closed', 'On Hold'],
@@ -63,8 +63,7 @@ const jobOpeningSchema = new mongoose.Schema(
   }
 );
 
-jobOpeningSchema.index({ tenantId: 1, status: 1 });
-jobOpeningSchema.index({ tenantId: 1, departmentId: 1 });
+jobOpeningSchema.index({ status: 1 });
+jobOpeningSchema.index({ departmentId: 1 });
 
 export default mongoose.model('JobOpening', jobOpeningSchema);
-

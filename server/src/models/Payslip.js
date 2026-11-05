@@ -10,12 +10,6 @@ const itemSchema = new mongoose.Schema(
 
 const payslipSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     payrollRunId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'PayrollRun',
@@ -68,7 +62,7 @@ const payslipSchema = new mongoose.Schema(
       type: Number,
       default: 30,
     },
-    lossOfPayDays: {
+    lopDays: {
       type: Number,
       default: 0,
     },
@@ -80,14 +74,16 @@ const payslipSchema = new mongoose.Schema(
     paymentDate: {
       type: Date,
     },
+    calculationSnapshot: {
+      type: mongoose.Schema.Types.Mixed,
+    },
   },
   {
     timestamps: true,
   }
 );
 
-payslipSchema.index({ tenantId: 1, employeeId: 1, month: 1, year: 1 }, { unique: true });
-payslipSchema.index({ tenantId: 1, payrollRunId: 1 });
+payslipSchema.index({ employeeId: 1, month: 1, year: 1 }, { unique: true });
+payslipSchema.index({ payrollRunId: 1 });
 
 export default mongoose.model('Payslip', payslipSchema);
-

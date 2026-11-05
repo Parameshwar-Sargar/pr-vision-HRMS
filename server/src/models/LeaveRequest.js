@@ -3,12 +3,6 @@ import { LEAVE_STATUS } from '../config/constants.js';
 
 const leaveRequestSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     employeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
@@ -42,6 +36,14 @@ const leaveRequestSchema = new mongoose.Schema(
       enum: Object.values(LEAVE_STATUS),
       default: LEAVE_STATUS.PENDING,
     },
+    managerApproved: {
+      type: Boolean,
+      default: false,
+    },
+    hrApproved: {
+      type: Boolean,
+      default: false,
+    },
     reviewedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -64,9 +66,7 @@ const leaveRequestSchema = new mongoose.Schema(
   }
 );
 
-leaveRequestSchema.index({ tenantId: 1, employeeId: 1, status: 1 });
-leaveRequestSchema.index({ tenantId: 1, status: 1 });
-leaveRequestSchema.index({ tenantId: 1, startDate: 1, endDate: 1 });
+leaveRequestSchema.index({ employeeId: 1, status: 1 });
+leaveRequestSchema.index({ startDate: 1, endDate: 1 });
 
 export default mongoose.model('LeaveRequest', leaveRequestSchema);
-

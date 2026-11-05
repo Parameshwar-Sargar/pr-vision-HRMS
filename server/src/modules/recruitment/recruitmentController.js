@@ -1,12 +1,18 @@
 import { z } from 'zod';
 import JobOpening from '../../models/JobOpening.js';
 import Candidate from '../../models/Candidate.js';
+import Employee from '../../models/Employee.js';
+import User from '../../models/User.js';
+import Department from '../../models/Department.js';
+import { ROLES, LIFECYCLE_STAGES, ROLE_DEFAULT_PERMISSIONS } from '../../config/constants.js';
 import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { logAudit } from '../../middleware/auditMiddleware.js';
 
 const jobOpeningSchema = z.object({
   title: z.string().min(2, 'Job title is required'),
   departmentId: z.string().min(1, 'Department is required'),
-  designationId: z.string().optional(),
+  designationId: z.string().optional().nullable(),
+  branchId: z.string().optional().nullable(),
   openingsCount: z.number().default(1),
   location: z.string().default('Hybrid / On-site'),
   type: z.enum(['Full-Time', 'Part-Time', 'Contract', 'Internship', 'Remote']).default('Full-Time'),
@@ -33,14 +39,15 @@ const candidateSchema = z.object({
 // Job Openings
 export const getJobOpenings = async (req, res, next) => {
   try {
-    const jobs = await JobOpening.find({ tenantId: req.tenantId })
+    const jobs = await JobOpening.find()
       .populate('departmentId', 'name')
       .populate('designationId', 'title')
+      .populate('branchId', 'name code')
       .sort({ createdAt: -1 });
 
     const jobsWithCandidateCounts = await Promise.all(
       jobs.map(async (job) => {
-        const count = await Candidate.countDocuments({ tenantId: req.tenantId, jobOpeningId: job._id });
+        const count = await Candidate.countDocuments({ jobOpeningId: job._id });
         const obj = job.toObject();
         obj.candidateCount = count;
         return obj;
@@ -57,7 +64,6 @@ export const createJobOpening = async (req, res, next) => {
   try {
     const validated = jobOpeningSchema.parse(req.body);
     const job = await JobOpening.create({
-      tenantId: req.tenantId,
       ...validated,
       deadline: validated.deadline ? new Date(validated.deadline) : undefined,
     });
@@ -72,7 +78,7 @@ export const updateJobOpening = async (req, res, next) => {
     const { id } = req.params;
     const validated = jobOpeningSchema.parse(req.body);
 
-    const job = await JobOpening.findOne({ _id: id, tenantId: req.tenantId });
+    const job = await JobOpening.findById(id);
     if (!job) return sendError(res, 'Job opening not found.', [], 404);
 
     Object.assign(job, validated);
@@ -89,13 +95,18 @@ export const updateJobOpening = async (req, res, next) => {
 export const getCandidates = async (req, res, next) => {
   try {
     const { jobOpeningId, status } = req.query;
-    const query = { tenantId: req.tenantId };
+    const query = {};
 
     if (jobOpeningId) query.jobOpeningId = jobOpeningId;
     if (status) query.status = status;
 
     const candidates = await Candidate.find(query)
-      .populate('jobOpeningId', 'title departmentId')
+      .populate({
+        path: 'jobOpeningId',
+        select: 'title departmentId',
+        populate: { path: 'departmentId', select: 'name' },
+      })
+      .populate('convertedToEmployeeId', 'employeeId firstName lastName email')
       .sort({ appliedDate: -1 });
 
     return sendSuccess(res, 'Candidates retrieved.', { candidates });
@@ -107,10 +118,7 @@ export const getCandidates = async (req, res, next) => {
 export const addCandidate = async (req, res, next) => {
   try {
     const validated = candidateSchema.parse(req.body);
-    const candidate = await Candidate.create({
-      tenantId: req.tenantId,
-      ...validated,
-    });
+    const candidate = await Candidate.create(validated);
     return sendSuccess(res, 'Candidate registered successfully.', { candidate }, 201);
   } catch (error) {
     next(error);
@@ -122,7 +130,7 @@ export const updateCandidateStatus = async (req, res, next) => {
     const { id } = req.params;
     const { status, rating, notes, interviewSchedule } = req.body;
 
-    const candidate = await Candidate.findOne({ _id: id, tenantId: req.tenantId });
+    const candidate = await Candidate.findById(id);
     if (!candidate) return sendError(res, 'Candidate not found.', [], 404);
 
     if (status) candidate.status = status;
@@ -137,3 +145,92 @@ export const updateCandidateStatus = async (req, res, next) => {
   }
 };
 
+/**
+ * Convert Hired Candidate to Employee
+ */
+export const convertCandidateToEmployee = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const {
+      branchId,
+      departmentId: customDeptId,
+      designationId: customDesigId,
+      joiningDate = new Date(),
+      probationPeriodMonths = 3,
+      password = 'Welcome@123',
+    } = req.body;
+
+    const candidate = await Candidate.findById(id).populate('jobOpeningId');
+    if (!candidate) {
+      return sendError(res, 'Candidate not found.', [], 404);
+    }
+
+    if (candidate.convertedToEmployeeId) {
+      return sendError(res, 'This candidate has already been converted to an employee.', [], 400);
+    }
+
+    // Split name
+    const nameParts = candidate.fullName.trim().split(' ');
+    const firstName = nameParts[0] || 'Employee';
+    const lastName = nameParts.slice(1).join(' ') || 'Team';
+
+    const departmentId = customDeptId || candidate.jobOpeningId?.departmentId;
+    const designationId = customDesigId || candidate.jobOpeningId?.designationId;
+
+    if (!departmentId) {
+      return sendError(res, 'Department is required to onboard this candidate.', [], 400);
+    }
+
+    // Generate unique employee ID
+    const count = await Employee.countDocuments();
+    const employeeId = `PRV-${String(count + 1).padStart(4, '0')}`;
+
+    // Provision user account
+    let user = await User.findOne({ email: candidate.email.toLowerCase() });
+    if (!user) {
+      user = await User.create({
+        name: candidate.fullName,
+        email: candidate.email.toLowerCase(),
+        password,
+        role: ROLES.EMPLOYEE,
+        branchId: branchId || null,
+        permissions: ROLE_DEFAULT_PERMISSIONS.EMPLOYEE,
+      });
+    }
+
+    const employee = await Employee.create({
+      employeeId,
+      firstName,
+      lastName,
+      email: candidate.email.toLowerCase(),
+      phone: candidate.phone || '',
+      departmentId,
+      designationId: designationId || null,
+      branchId: branchId || candidate.jobOpeningId?.branchId || null,
+      userId: user._id,
+      joiningDate: new Date(joiningDate),
+      lifecycleStage: LIFECYCLE_STAGES.PROBATION,
+      probationPeriodMonths,
+      employmentStatus: 'Active',
+    });
+
+    candidate.status = 'Hired';
+    candidate.convertedToEmployeeId = employee._id;
+    await candidate.save();
+
+    await logAudit({
+      req,
+      action: 'CANDIDATE_CONVERTED_TO_EMPLOYEE',
+      entity: 'Candidate',
+      entityId: candidate._id,
+      details: { employeeId: employee.employeeId, employeeName: candidate.fullName },
+    });
+
+    return sendSuccess(res, 'Candidate successfully converted and onboarded as an Employee.', {
+      candidate,
+      employee,
+    }, 201);
+  } catch (error) {
+    next(error);
+  }
+};

@@ -6,7 +6,6 @@ export const authenticate = async (req, res, next) => {
   try {
     let token = null;
 
-    // Check Authorization header
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.split(' ')[1];
@@ -28,15 +27,14 @@ export const authenticate = async (req, res, next) => {
       return sendError(res, 'Invalid authentication token.', [], 401);
     }
 
-    // Retrieve user from database to ensure account is active and role is fresh
-    const user = await User.findById(decoded.userId).populate('tenantId', 'name slug status isDeleted');
+    const user = await User.findById(decoded.userId).populate('branchId', 'name code');
 
     if (!user) {
       return sendError(res, 'User account not found.', [], 401);
     }
 
     if (!user.isActive) {
-      return sendError(res, 'Account has been deactivated. Please contact your administrator.', [], 403);
+      return sendError(res, 'Account has been deactivated. Please contact your HR administrator.', [], 403);
     }
 
     req.user = user;
@@ -46,4 +44,3 @@ export const authenticate = async (req, res, next) => {
     return sendError(res, 'Authentication failed.', [error.message], 500);
   }
 };
-

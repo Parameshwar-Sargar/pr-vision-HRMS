@@ -7,7 +7,7 @@ export const requireRoles = (...roles) => {
       return sendError(res, 'Authentication required.', [], 401);
     }
 
-    if (req.user.role === ROLES.SUPER_ADMIN) {
+    if (req.user.role === ROLES.ADMIN) {
       return next();
     }
 
@@ -30,8 +30,7 @@ export const requirePermissions = (...permissions) => {
       return sendError(res, 'Authentication required.', [], 401);
     }
 
-    // Super Admin and Company Admin inherently hold master privileges
-    if (req.user.role === ROLES.SUPER_ADMIN || req.user.role === ROLES.COMPANY_ADMIN) {
+    if (req.user.role === ROLES.ADMIN) {
       return next();
     }
 
@@ -41,7 +40,7 @@ export const requirePermissions = (...permissions) => {
     if (!hasAll) {
       return sendError(
         res,
-        `Access denied. You lack required permissions: [${permissions.join(', ')}].`,
+        `Access denied. Missing required permission: [${permissions.join(', ')}].`,
         [],
         403
       );
@@ -50,4 +49,3 @@ export const requirePermissions = (...permissions) => {
     next();
   };
 };
-

@@ -1,10 +1,12 @@
 import mongoose from 'mongoose';
 
-const goalSchema = new mongoose.Schema(
+const kpiSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
     description: String,
     weight: { type: Number, default: 20 },
+    target: { type: String, default: '100%' },
+    achieved: { type: String, default: '' },
     progress: { type: Number, default: 0, min: 0, max: 100 },
     status: {
       type: String,
@@ -17,12 +19,6 @@ const goalSchema = new mongoose.Schema(
 
 const performanceReviewSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     employeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
@@ -35,9 +31,9 @@ const performanceReviewSchema = new mongoose.Schema(
     },
     reviewCycle: {
       type: String,
-      required: true, // e.g. "Q1 2026" or "Annual 2026"
+      required: true, // e.g. "Q1 2026", "Annual 2026"
     },
-    goals: [goalSchema],
+    goals: [kpiSchema],
     selfRating: {
       type: Number,
       min: 1,
@@ -68,6 +64,15 @@ const performanceReviewSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    pipRequired: {
+      type: Boolean,
+      default: false,
+    },
+    pipDetails: {
+      objectives: String,
+      timelineDays: Number,
+      outcome: String,
+    },
     status: {
       type: String,
       enum: ['Self Review Pending', 'Manager Review Pending', 'Completed'],
@@ -82,8 +87,7 @@ const performanceReviewSchema = new mongoose.Schema(
   }
 );
 
-performanceReviewSchema.index({ tenantId: 1, employeeId: 1, reviewCycle: 1 }, { unique: true });
-performanceReviewSchema.index({ tenantId: 1, status: 1 });
+performanceReviewSchema.index({ employeeId: 1, reviewCycle: 1 }, { unique: true });
+performanceReviewSchema.index({ status: 1 });
 
 export default mongoose.model('PerformanceReview', performanceReviewSchema);
-

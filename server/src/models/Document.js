@@ -2,16 +2,10 @@ import mongoose from 'mongoose';
 
 const documentSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     employeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
-      default: null, // Null indicates company-wide policy document
+      default: null, // Null = Company policy / general document
     },
     title: {
       type: String,
@@ -27,6 +21,8 @@ const documentSchema = new mongoose.Schema(
         'Certificate',
         'Tax Document',
         'Company Policy',
+        'Experience Letter',
+        'Relieving Letter',
         'Payslip Archive',
         'Other',
       ],
@@ -59,8 +55,7 @@ const documentSchema = new mongoose.Schema(
   }
 );
 
-documentSchema.index({ tenantId: 1, employeeId: 1 });
-documentSchema.index({ tenantId: 1, category: 1 });
+documentSchema.index({ employeeId: 1 });
+documentSchema.index({ category: 1 });
 
 export default mongoose.model('Document', documentSchema);
-

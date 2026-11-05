@@ -41,7 +41,6 @@ const departmentSchema = new mongoose.Schema(
   }
 );
 
-departmentSchema.index({ name: 1 }, { unique: true });
 departmentSchema.index({ isDeleted: 1 });
 
 export default mongoose.model('Department', departmentSchema);

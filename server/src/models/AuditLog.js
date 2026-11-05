@@ -2,12 +2,6 @@ import mongoose from 'mongoose';
 
 const auditLogSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     actorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -23,11 +17,11 @@ const auditLogSchema = new mongoose.Schema(
     },
     action: {
       type: String,
-      required: true, // e.g. "EMPLOYEE_CREATED", "LEAVE_APPROVED", "PAYROLL_PROCESSED"
+      required: true,
     },
     entity: {
       type: String,
-      required: true, // e.g. "Employee", "LeaveRequest", "PayrollRun"
+      required: true,
     },
     entityId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -47,8 +41,7 @@ const auditLogSchema = new mongoose.Schema(
   }
 );
 
-auditLogSchema.index({ tenantId: 1, createdAt: -1 });
-auditLogSchema.index({ tenantId: 1, entity: 1, entityId: 1 });
+auditLogSchema.index({ createdAt: -1 });
+auditLogSchema.index({ entity: 1, entityId: 1 });
 
 export default mongoose.model('AuditLog', auditLogSchema);
-

@@ -5,15 +5,19 @@ import { sendSuccess, sendError } from '../../utils/responseUtils.js';
 
 export const getPerformanceReviews = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const { employeeId, reviewCycle } = req.query;
-
-    const query = { tenantId };
+    const query = {};
 
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ tenantId, userId: req.user._id });
+      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
       if (!myEmp) return sendSuccess(res, 'No records', { reviews: [] });
       query.employeeId = myEmp._id;
+    } else if (req.user.role === ROLES.MANAGER) {
+      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
+      if (myEmp) {
+        const team = await Employee.find({ managerId: myEmp._id, isDeleted: false }).select('_id');
+        query.$or = [{ employeeId: myEmp._id }, { employeeId: { $in: team.map((t) => t._id) } }];
+      }
     } else if (employeeId) {
       query.employeeId = employeeId;
     }
@@ -36,7 +40,6 @@ export const createPerformanceReview = async (req, res, next) => {
     const { employeeId, reviewCycle, goals } = req.body;
 
     const exists = await PerformanceReview.findOne({
-      tenantId: req.tenantId,
       employeeId,
       reviewCycle,
     });
@@ -45,7 +48,6 @@ export const createPerformanceReview = async (req, res, next) => {
     }
 
     const review = await PerformanceReview.create({
-      tenantId: req.tenantId,
       employeeId,
       reviewerId: req.user._id,
       reviewCycle,
@@ -64,7 +66,7 @@ export const submitEmployeeSelfReview = async (req, res, next) => {
     const { id } = req.params;
     const { selfRating, goals, comments } = req.body;
 
-    const review = await PerformanceReview.findOne({ _id: id, tenantId: req.tenantId });
+    const review = await PerformanceReview.findById(id);
     if (!review) return sendError(res, 'Review not found.', [], 404);
 
     if (selfRating) review.selfRating = selfRating;
@@ -82,9 +84,9 @@ export const submitEmployeeSelfReview = async (req, res, next) => {
 export const submitManagerReview = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { managerRating, finalScore, strengths, areasForImprovement, comments } = req.body;
+    const { managerRating, finalScore, strengths, areasForImprovement, comments, pipDetails } = req.body;
 
-    const review = await PerformanceReview.findOne({ _id: id, tenantId: req.tenantId });
+    const review = await PerformanceReview.findById(id);
     if (!review) return sendError(res, 'Review not found.', [], 404);
 
     if (managerRating) review.managerRating = managerRating;
@@ -92,6 +94,7 @@ export const submitManagerReview = async (req, res, next) => {
     if (strengths) review.strengths = strengths;
     if (areasForImprovement) review.areasForImprovement = areasForImprovement;
     if (comments) review.comments = comments;
+    if (pipDetails) review.pipDetails = pipDetails;
     review.status = 'Completed';
     review.completedDate = new Date();
 
@@ -101,4 +104,3 @@ export const submitManagerReview = async (req, res, next) => {
     next(error);
   }
 };
-

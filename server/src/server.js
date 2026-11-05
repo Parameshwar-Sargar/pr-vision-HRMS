@@ -1,7 +1,7 @@
 import app from './app.js';
 import { connectDB, disconnectDB } from './config/db.js';
 import { env } from './config/env.js';
-import Tenant from './models/Tenant.js';
+import User from './models/User.js';
 import { seedDatabase } from './scripts/seed.js';
 
 const startServer = async () => {
@@ -9,18 +9,19 @@ const startServer = async () => {
     await connectDB();
 
     // Auto-seed if database is empty in development mode
-    const count = await Tenant.countDocuments();
+    const count = await User.countDocuments();
     if (count === 0 && env.NODE_ENV !== 'production') {
-      console.log('⚡ Empty database detected. Auto-seeding initial multi-tenant demo records...');
+      console.log('⚡ Empty database detected. Auto-seeding initial enterprise master records...');
       await seedDatabase({ disconnect: false });
     }
 
     const server = app.listen(env.PORT, () => {
       console.log('========================================================');
       console.log(`🚀 PR VISION HRMS Server Running`);
-      console.log(`📍 Port: http://localhost:${env.PORT}`);
+      console.log(`📍 URL: http://localhost:${env.PORT}`);
       console.log(`🌍 Environment: ${env.NODE_ENV}`);
-      console.log(`🛡️  Multi-Tenant SaaS Engine Active`);
+      console.log(`🏢 Enterprise Edition: PR VISION INNOVATIONS`);
+      console.log(`✨ Tagline: People. Process. Performance.`);
       console.log('========================================================');
     });
 

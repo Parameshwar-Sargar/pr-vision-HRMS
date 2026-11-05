@@ -31,16 +31,11 @@ const componentSchema = new mongoose.Schema(
 
 const salaryStructureSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     employeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
       required: true,
+      index: true,
     },
     basicSalary: {
       type: Number,
@@ -55,13 +50,17 @@ const salaryStructureSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    conveyanceAllowance: {
+      type: Number,
+      default: 0,
+    },
     customComponents: [componentSchema],
     statutoryConfig: {
       pfEnabled: { type: Boolean, default: true },
       pfEmployeeRate: { type: Number, default: 12 }, // 12% of basic
       esiEnabled: { type: Boolean, default: false },
       esiEmployeeRate: { type: Number, default: 0.75 }, // 0.75% of gross
-      professionalTax: { type: Number, default: 200 }, // Flat monthly PT
+      professionalTax: { type: Number, default: 200 },
       tdsDeduction: { type: Number, default: 0 },
       isVerifiedByProfessional: { type: Boolean, default: false },
     },
@@ -79,7 +78,6 @@ const salaryStructureSchema = new mongoose.Schema(
   }
 );
 
-salaryStructureSchema.index({ tenantId: 1, employeeId: 1, isActive: 1 });
+salaryStructureSchema.index({ employeeId: 1, isActive: 1 });
 
 export default mongoose.model('SalaryStructure', salaryStructureSchema);
-

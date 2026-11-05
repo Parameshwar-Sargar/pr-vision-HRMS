@@ -4,8 +4,7 @@ import User from '../../models/User.js';
 import LeaveType from '../../models/LeaveType.js';
 import LeaveBalance from '../../models/LeaveBalance.js';
 import SalaryStructure from '../../models/SalaryStructure.js';
-import Tenant from '../../models/Tenant.js';
-import { ROLES } from '../../config/constants.js';
+import { ROLES, LIFECYCLE_STAGES } from '../../config/constants.js';
 import { sendSuccess, sendError } from '../../utils/responseUtils.js';
 import { logAudit } from '../../middleware/auditMiddleware.js';
 
@@ -14,6 +13,7 @@ const employeeCreateSchema = z.object({
   lastName: z.string().min(1, 'Last name is required'),
   email: z.string().email('Invalid email address'),
   phone: z.string().optional().default(''),
+  branchId: z.string().nullable().optional(),
   departmentId: z.string().min(1, 'Department is required'),
   designationId: z.string().min(1, 'Designation is required'),
   managerId: z.string().nullable().optional(),
@@ -22,6 +22,7 @@ const employeeCreateSchema = z.object({
   gender: z.enum(['Male', 'Female', 'Non-Binary', 'Other']).default('Male'),
   dateOfBirth: z.string().optional(),
   joiningDate: z.string().optional(),
+  probationPeriodMonths: z.number().default(3),
   address: z
     .object({
       street: z.string().optional().default(''),
@@ -29,6 +30,13 @@ const employeeCreateSchema = z.object({
       state: z.string().optional().default(''),
       postalCode: z.string().optional().default(''),
       country: z.string().optional().default('India'),
+    })
+    .optional(),
+  emergencyContact: z
+    .object({
+      name: z.string().optional().default(''),
+      relationship: z.string().optional().default(''),
+      phone: z.string().optional().default(''),
     })
     .optional(),
   bankDetails: z
@@ -40,21 +48,16 @@ const employeeCreateSchema = z.object({
       branch: z.string().optional().default(''),
     })
     .optional(),
-  // Portal account options
   createUserAccount: z.boolean().default(true),
   password: z.string().min(6).optional().default('Welcome@123'),
-  role: z.enum([ROLES.COMPANY_ADMIN, ROLES.HR_MANAGER, ROLES.MANAGER, ROLES.EMPLOYEE]).default(ROLES.EMPLOYEE),
+  role: z.enum([ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.MANAGER, ROLES.EMPLOYEE, ROLES.RECRUITER, ROLES.PAYROLL_ADMIN]).default(ROLES.EMPLOYEE),
 });
 
-/**
- * List employees with search, department filter, status filter, and pagination
- */
 export const getEmployees = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
-    const { page = 1, limit = 10, search = '', departmentId, status } = req.query;
+    const { page = 1, limit = 10, search = '', departmentId, branchId, status } = req.query;
 
-    const query = { tenantId, isDeleted: false };
+    const query = { isDeleted: false };
 
     if (search) {
       query.$or = [
@@ -65,13 +68,9 @@ export const getEmployees = async (req, res, next) => {
       ];
     }
 
-    if (departmentId) {
-      query.departmentId = departmentId;
-    }
-
-    if (status) {
-      query.employmentStatus = status;
-    }
+    if (departmentId) query.departmentId = departmentId;
+    if (branchId) query.branchId = branchId;
+    if (status) query.employmentStatus = status;
 
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const total = await Employee.countDocuments(query);
@@ -81,6 +80,7 @@ export const getEmployees = async (req, res, next) => {
       .limit(parseInt(limit, 10))
       .populate('departmentId', 'name code')
       .populate('designationId', 'title code')
+      .populate('branchId', 'name code city')
       .populate('managerId', 'firstName lastName employeeId')
       .populate('shiftId', 'name startTime endTime')
       .populate('userId', 'role isActive lastLoginAt');
@@ -99,33 +99,28 @@ export const getEmployees = async (req, res, next) => {
   }
 };
 
-/**
- * Get single employee by ID
- */
 export const getEmployeeById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const employee = await Employee.findOne({ _id: id, tenantId: req.tenantId, isDeleted: false })
+    const employee = await Employee.findOne({ _id: id, isDeleted: false })
       .populate('departmentId')
       .populate('designationId')
+      .populate('branchId')
       .populate('managerId', 'firstName lastName employeeId email')
       .populate('shiftId')
-      .populate('userId', 'role isActive lastLoginAt');
+      .populate('userId', 'role isActive lastLoginAt permissions');
 
     if (!employee) {
       return sendError(res, 'Employee not found.', [], 404);
     }
 
-    // Include leave balances and active salary structure
     const currentYear = new Date().getFullYear();
     const leaveBalances = await LeaveBalance.findOne({
-      tenantId: req.tenantId,
       employeeId: employee._id,
       year: currentYear,
     }).populate('balances.leaveTypeId');
 
     const salary = await SalaryStructure.findOne({
-      tenantId: req.tenantId,
       employeeId: employee._id,
       isActive: true,
     });
@@ -140,34 +135,17 @@ export const getEmployeeById = async (req, res, next) => {
   }
 };
 
-/**
- * Create a new employee
- */
 export const createEmployee = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const validated = employeeCreateSchema.parse(req.body);
 
-    // 1. Check tenant employee limit
-    const tenant = await Tenant.findById(tenantId);
-    const currentCount = await Employee.countDocuments({ tenantId, isDeleted: false });
-    if (tenant?.employeeLimit && currentCount >= tenant.employeeLimit) {
-      return sendError(
-        res,
-        `Employee quota reached (${currentCount}/${tenant.employeeLimit}). Please upgrade your plan.`,
-        [],
-        400
-      );
-    }
-
-    // 2. Check for duplicate email in this company
-    const duplicateEmail = await Employee.findOne({ tenantId, email: validated.email.toLowerCase(), isDeleted: false });
+    const duplicateEmail = await Employee.findOne({ email: validated.email.toLowerCase(), isDeleted: false });
     if (duplicateEmail) {
-      return sendError(res, 'An employee with this email already exists in your company.', [], 409);
+      return sendError(res, 'An employee with this email address already exists.', [], 409);
     }
 
-    // 3. Auto-generate sequential Employee ID (e.g. EMP-001)
-    const lastEmployee = await Employee.findOne({ tenantId }).sort({ createdAt: -1 });
+    // Auto-generate sequential Employee ID (EMP-001)
+    const lastEmployee = await Employee.findOne().sort({ createdAt: -1 });
     let nextNum = 1;
     if (lastEmployee && lastEmployee.employeeId) {
       const match = lastEmployee.employeeId.match(/\d+$/);
@@ -177,38 +155,45 @@ export const createEmployee = async (req, res, next) => {
     }
     const generatedEmpId = `EMP-${String(nextNum).padStart(3, '0')}`;
 
-    // 4. Create Employee record
+    const joinDate = validated.joiningDate ? new Date(validated.joiningDate) : new Date();
+    const probEnd = new Date(joinDate);
+    probEnd.setMonth(probEnd.getMonth() + (validated.probationPeriodMonths || 3));
+
     const employee = await Employee.create({
-      tenantId,
       employeeId: generatedEmpId,
       firstName: validated.firstName,
       lastName: validated.lastName,
       email: validated.email.toLowerCase(),
       phone: validated.phone,
+      branchId: validated.branchId || null,
       departmentId: validated.departmentId,
       designationId: validated.designationId,
       managerId: validated.managerId || null,
       shiftId: validated.shiftId || null,
       employmentType: validated.employmentType,
+      employmentStatus: LIFECYCLE_STAGES.PROBATION,
       gender: validated.gender,
       dateOfBirth: validated.dateOfBirth ? new Date(validated.dateOfBirth) : undefined,
-      joiningDate: validated.joiningDate ? new Date(validated.joiningDate) : new Date(),
+      joiningDate: joinDate,
+      probationPeriodMonths: validated.probationPeriodMonths || 3,
+      probationEndDate: probEnd,
       address: validated.address,
+      emergencyContact: validated.emergencyContact,
       bankDetails: validated.bankDetails,
     });
 
-    // 5. Create User account if requested
+    // Create User login account if checked
     let createdUser = null;
     if (validated.createUserAccount) {
-      const existingUser = await User.findOne({ tenantId, email: validated.email.toLowerCase() });
+      const existingUser = await User.findOne({ email: validated.email.toLowerCase() });
       if (!existingUser) {
         createdUser = await User.create({
-          tenantId,
           email: validated.email.toLowerCase(),
           password: validated.password,
           name: `${validated.firstName} ${validated.lastName}`.trim(),
           role: validated.role,
           employeeId: employee._id,
+          branchId: employee.branchId,
           isActive: true,
         });
         employee.userId = createdUser._id;
@@ -216,23 +201,20 @@ export const createEmployee = async (req, res, next) => {
       }
     }
 
-    // 6. Initialize default Leave Balances
-    const leaveTypes = await LeaveType.find({ tenantId, isActive: true });
+    // Initialize Leave Balances
+    const leaveTypes = await LeaveType.find({ isActive: true });
     if (leaveTypes.length > 0) {
       const currentYear = new Date().getFullYear();
-      const balances = leaveTypes.map((lt) => ({
-        leaveTypeId: lt._id,
-        allocated: lt.defaultDaysPerYear,
-        used: 0,
-        pending: 0,
-        remaining: lt.defaultDaysPerYear,
-      }));
-
       await LeaveBalance.create({
-        tenantId,
         employeeId: employee._id,
         year: currentYear,
-        balances,
+        balances: leaveTypes.map((lt) => ({
+          leaveTypeId: lt._id,
+          allocated: lt.defaultDaysPerYear,
+          used: 0,
+          pending: 0,
+          remaining: lt.defaultDaysPerYear,
+        })),
       });
     }
 
@@ -250,13 +232,10 @@ export const createEmployee = async (req, res, next) => {
   }
 };
 
-/**
- * Update employee
- */
 export const updateEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const employee = await Employee.findOne({ _id: id, tenantId: req.tenantId, isDeleted: false });
+    const employee = await Employee.findOne({ _id: id, isDeleted: false });
 
     if (!employee) {
       return sendError(res, 'Employee not found.', [], 404);
@@ -270,15 +249,17 @@ export const updateEmployee = async (req, res, next) => {
       'dateOfBirth',
       'gender',
       'joiningDate',
+      'branchId',
       'departmentId',
       'designationId',
       'managerId',
       'shiftId',
       'employmentType',
-      'employmentStatus',
       'address',
       'bankDetails',
       'emergencyContact',
+      'education',
+      'previousEmployment',
     ];
 
     for (const field of updatableFields) {
@@ -303,23 +284,134 @@ export const updateEmployee = async (req, res, next) => {
   }
 };
 
-/**
- * Soft delete / deactivate employee
- */
+// ==========================================
+// LIFECYCLE MANAGEMENT ENDPOINTS
+// ==========================================
+
+// 1. Confirm Probation
+export const confirmProbation = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const employee = await Employee.findById(id);
+    if (!employee) return sendError(res, 'Employee not found.', [], 404);
+
+    employee.employmentStatus = LIFECYCLE_STAGES.CONFIRMED;
+    employee.confirmationDate = new Date();
+    await employee.save();
+
+    await logAudit({
+      req,
+      action: 'PROBATION_CONFIRMED',
+      entity: 'Employee',
+      entityId: employee._id,
+      details: { employeeId: employee.employeeId, confirmedAt: employee.confirmationDate },
+    });
+
+    return sendSuccess(res, `Probation confirmed for ${employee.firstName} ${employee.lastName}.`, { employee });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 2. Promote Employee
+export const promoteEmployee = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { newDesignationId, newDepartmentId, remarks } = req.body;
+
+    const employee = await Employee.findById(id);
+    if (!employee) return sendError(res, 'Employee not found.', [], 404);
+
+    const oldDesig = employee.designationId;
+    if (newDesignationId) employee.designationId = newDesignationId;
+    if (newDepartmentId) employee.departmentId = newDepartmentId;
+    employee.employmentStatus = LIFECYCLE_STAGES.PROMOTED;
+    await employee.save();
+
+    await logAudit({
+      req,
+      action: 'EMPLOYEE_PROMOTED',
+      entity: 'Employee',
+      entityId: employee._id,
+      details: { previousDesignation: oldDesig, newDesignationId, remarks },
+    });
+
+    return sendSuccess(res, `Promotion processed for ${employee.firstName} ${employee.lastName}.`, { employee });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 3. Process Resignation / Exit
+export const processResignation = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { resignationDate, lastWorkingDate, exitInterviewNotes } = req.body;
+
+    const employee = await Employee.findById(id);
+    if (!employee) return sendError(res, 'Employee not found.', [], 404);
+
+    employee.employmentStatus = LIFECYCLE_STAGES.RESIGNED;
+    if (resignationDate) employee.resignationDate = new Date(resignationDate);
+    if (lastWorkingDate) employee.lastWorkingDate = new Date(lastWorkingDate);
+    if (exitInterviewNotes) employee.exitInterviewNotes = exitInterviewNotes;
+    employee.fullAndFinalSettlementStatus = 'Pending';
+
+    await employee.save();
+
+    await logAudit({
+      req,
+      action: 'EMPLOYEE_RESIGNED',
+      entity: 'Employee',
+      entityId: employee._id,
+      details: { lastWorkingDate },
+    });
+
+    return sendSuccess(res, 'Resignation registered and exit workflow initiated.', { employee });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 4. Issue Relieving / Experience Letter
+export const issueRelievingLetter = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const employee = await Employee.findById(id);
+    if (!employee) return sendError(res, 'Employee not found.', [], 404);
+
+    employee.relievingLetterIssued = true;
+    employee.experienceLetterIssued = true;
+    employee.employmentStatus = LIFECYCLE_STAGES.RELIEVED;
+    await employee.save();
+
+    await logAudit({
+      req,
+      action: 'RELIEVING_LETTER_ISSUED',
+      entity: 'Employee',
+      entityId: employee._id,
+      details: { employeeId: employee.employeeId },
+    });
+
+    return sendSuccess(res, `Relieving & Experience letters issued for ${employee.firstName} ${employee.lastName}.`, {
+      employee,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 5. Soft Delete / Deactivate
 export const deleteEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const employee = await Employee.findOne({ _id: id, tenantId: req.tenantId });
-
-    if (!employee) {
-      return sendError(res, 'Employee not found.', [], 404);
-    }
+    const employee = await Employee.findById(id);
+    if (!employee) return sendError(res, 'Employee not found.', [], 404);
 
     employee.isDeleted = true;
-    employee.employmentStatus = 'Terminated';
+    employee.employmentStatus = LIFECYCLE_STAGES.TERMINATED;
     await employee.save();
 
-    // Also deactivate linked user account
     if (employee.userId) {
       await User.findByIdAndUpdate(employee.userId, { isActive: false });
     }
@@ -337,4 +429,3 @@ export const deleteEmployee = async (req, res, next) => {
     next(error);
   }
 };
-

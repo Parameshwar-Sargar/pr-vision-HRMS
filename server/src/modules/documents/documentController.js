@@ -7,14 +7,11 @@ import fs from 'fs';
 
 export const getDocuments = async (req, res, next) => {
   try {
-    const tenantId = req.tenantId;
     const { employeeId, category } = req.query;
-
-    const query = { tenantId };
+    const query = {};
 
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ tenantId, userId: req.user._id });
-      // Employees see their own documents plus company-wide policy documents (employeeId: null)
+      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
       query.$or = [
         { employeeId: myEmp ? myEmp._id : null },
         { employeeId: null },
@@ -27,7 +24,7 @@ export const getDocuments = async (req, res, next) => {
 
     const documents = await Document.find(query)
       .populate('employeeId', 'firstName lastName employeeId')
-      .populate('uploadedBy', 'name email')
+      .populate('uploadedBy', 'email')
       .sort({ createdAt: -1 });
 
     return sendSuccess(res, 'Documents retrieved.', { documents });
@@ -45,7 +42,6 @@ export const uploadDocument = async (req, res, next) => {
     const { title, category, employeeId } = req.body;
 
     const doc = await Document.create({
-      tenantId: req.tenantId,
       employeeId: employeeId || null,
       title: title || req.file.originalname,
       category: category || 'Other',
@@ -65,27 +61,42 @@ export const uploadDocument = async (req, res, next) => {
 export const downloadDocument = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const doc = await Document.findOne({ _id: id, tenantId: req.tenantId });
+    const doc = await Document.findById(id);
     if (!doc) {
       return sendError(res, 'Document not found.', [], 404);
     }
 
-    // Role check for employee
-    if (req.user.role === ROLES.EMPLOYEE && doc.employeeId) {
-      const myEmp = await Employee.findOne({ tenantId: req.tenantId, userId: req.user._id });
-      if (!myEmp || doc.employeeId.toString() !== myEmp._id.toString()) {
-        return sendError(res, 'Access denied.', [], 403);
-      }
+    const filePath = path.join(process.cwd(), 'uploads', doc.fileName);
+    if (fs.existsSync(filePath)) {
+      return res.download(filePath, doc.title || doc.fileName);
     }
-
-    const filePath = path.resolve('uploads', doc.fileName);
-    if (!fs.existsSync(filePath)) {
-      return sendError(res, 'File physical asset missing from server.', [], 404);
-    }
-
-    return res.download(filePath, doc.title || doc.fileName);
+    return sendError(res, 'File not found on server.', [], 404);
   } catch (error) {
     next(error);
   }
 };
 
+export const deleteDocument = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const doc = await Document.findById(id);
+
+    if (!doc) {
+      return sendError(res, 'Document not found.', [], 404);
+    }
+
+    const filePath = path.join(process.cwd(), 'uploads', doc.fileName);
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (e) {
+        console.error('File cleanup error:', e);
+      }
+    }
+
+    await Document.findByIdAndDelete(id);
+    return sendSuccess(res, 'Document deleted successfully.');
+  } catch (error) {
+    next(error);
+  }
+};

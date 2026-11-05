@@ -14,7 +14,7 @@ const designationSchema = z.object({
 export const getDesignations = async (req, res, next) => {
   try {
     const { departmentId } = req.query;
-    const query = { tenantId: req.tenantId, isDeleted: false };
+    const query = { isDeleted: false };
     if (departmentId) {
       query.departmentId = departmentId;
     }
@@ -34,7 +34,6 @@ export const createDesignation = async (req, res, next) => {
     const validated = designationSchema.parse(req.body);
 
     const exists = await Designation.findOne({
-      tenantId: req.tenantId,
       title: { $regex: new RegExp(`^${validated.title}$`, 'i') },
       departmentId: validated.departmentId,
       isDeleted: false,
@@ -44,10 +43,9 @@ export const createDesignation = async (req, res, next) => {
     }
 
     const designation = await Designation.create({
-      tenantId: req.tenantId,
       title: validated.title,
       departmentId: validated.departmentId,
-      code: validated.code,
+      code: validated.code || validated.title.substring(0, 4).toUpperCase(),
       level: validated.level,
       description: validated.description,
     });
@@ -63,14 +61,14 @@ export const updateDesignation = async (req, res, next) => {
     const { id } = req.params;
     const validated = designationSchema.parse(req.body);
 
-    const designation = await Designation.findOne({ _id: id, tenantId: req.tenantId, isDeleted: false });
+    const designation = await Designation.findOne({ _id: id, isDeleted: false });
     if (!designation) {
       return sendError(res, 'Designation not found.', [], 404);
     }
 
     designation.title = validated.title;
     designation.departmentId = validated.departmentId;
-    designation.code = validated.code;
+    designation.code = validated.code || designation.code;
     designation.level = validated.level;
     designation.description = validated.description;
 
@@ -86,29 +84,29 @@ export const deleteDesignation = async (req, res, next) => {
     const { id } = req.params;
 
     const activeEmployees = await Employee.countDocuments({
-      tenantId: req.tenantId,
       designationId: id,
       isDeleted: false,
     });
+
     if (activeEmployees > 0) {
       return sendError(
         res,
-        `Cannot delete designation: ${activeEmployees} active employee(s) hold this title.`,
+        `Cannot delete designation: ${activeEmployees} active employee(s) hold this designation.`,
         [],
         400
       );
     }
 
-    const designation = await Designation.findOne({ _id: id, tenantId: req.tenantId });
+    const designation = await Designation.findOne({ _id: id });
     if (!designation) {
       return sendError(res, 'Designation not found.', [], 404);
     }
 
     designation.isDeleted = true;
     await designation.save();
+
     return sendSuccess(res, 'Designation deleted successfully.');
   } catch (error) {
     next(error);
   }
 };
-

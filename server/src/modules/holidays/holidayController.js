@@ -5,17 +5,22 @@ import { sendSuccess, sendError } from '../../utils/responseUtils.js';
 const holidaySchema = z.object({
   name: z.string().min(2, 'Holiday name is required'),
   date: z.string().min(1, 'Date is required'),
+  branchId: z.string().nullable().optional(),
   description: z.string().optional().default(''),
   isOptional: z.boolean().default(false),
 });
 
 export const getHolidays = async (req, res, next) => {
   try {
-    const { year = new Date().getFullYear() } = req.query;
-    const holidays = await Holiday.find({
-      tenantId: req.tenantId,
-      year: parseInt(year, 10),
-    }).sort({ date: 1 });
+    const { year = new Date().getFullYear(), branchId } = req.query;
+    const filter = { year: parseInt(year, 10) };
+    if (branchId) {
+      filter.$or = [{ branchId: null }, { branchId }];
+    }
+
+    const holidays = await Holiday.find(filter)
+      .populate('branchId', 'name code')
+      .sort({ date: 1 });
 
     return sendSuccess(res, 'Holidays retrieved.', { holidays });
   } catch (error) {
@@ -30,10 +35,10 @@ export const createHoliday = async (req, res, next) => {
     const year = holidayDate.getFullYear();
 
     const holiday = await Holiday.create({
-      tenantId: req.tenantId,
       name: validated.name,
       date: holidayDate,
       year,
+      branchId: validated.branchId || null,
       description: validated.description,
       isOptional: validated.isOptional,
     });
@@ -49,7 +54,7 @@ export const updateHoliday = async (req, res, next) => {
     const { id } = req.params;
     const validated = holidaySchema.parse(req.body);
 
-    const holiday = await Holiday.findOne({ _id: id, tenantId: req.tenantId });
+    const holiday = await Holiday.findById(id);
     if (!holiday) {
       return sendError(res, 'Holiday not found.', [], 404);
     }
@@ -57,6 +62,7 @@ export const updateHoliday = async (req, res, next) => {
     holiday.name = validated.name;
     holiday.date = new Date(validated.date);
     holiday.year = holiday.date.getFullYear();
+    holiday.branchId = validated.branchId || null;
     holiday.description = validated.description;
     holiday.isOptional = validated.isOptional;
 
@@ -70,15 +76,12 @@ export const updateHoliday = async (req, res, next) => {
 export const deleteHoliday = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const holiday = await Holiday.findOne({ _id: id, tenantId: req.tenantId });
+    const holiday = await Holiday.findByIdAndDelete(id);
     if (!holiday) {
       return sendError(res, 'Holiday not found.', [], 404);
     }
-
-    await Holiday.deleteOne({ _id: id });
     return sendSuccess(res, 'Holiday deleted successfully.');
   } catch (error) {
     next(error);
   }
 };
-
