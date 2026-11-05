@@ -30,7 +30,7 @@ export default function LeavesPage() {
     reason: '',
   });
 
-  const isApprover = user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER' || user?.role === 'MANAGER';
+  const isApprover = user?.role === 'ADMIN' || user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER' || user?.role === 'MANAGER';
 
   useEffect(() => {
     fetchLeaveData();

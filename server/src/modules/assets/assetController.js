@@ -124,3 +124,4 @@ export const returnAsset = async (req, res, next) => {
     next(error);
   }
 };
+

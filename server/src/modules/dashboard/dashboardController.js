@@ -146,6 +146,15 @@ export const getDashboardStats = async (req, res, next) => {
         .sort({ createdAt: -1 })
         .limit(6);
 
+      // Upcoming Birthdays
+      const upcomingBirthdays = await Employee.find({
+        isDeleted: false,
+        dateOfBirth: { $exists: true, $ne: null },
+      })
+        .select('firstName lastName employeeId dateOfBirth departmentId')
+        .populate('departmentId', 'name')
+        .limit(5);
+
       return sendSuccess(res, 'Enterprise dashboard data loaded.', {
         role: user.role,
         kpi: {
@@ -174,6 +183,7 @@ export const getDashboardStats = async (req, res, next) => {
         departmentDistribution,
         attendanceTrends,
         upcomingHolidays,
+        upcomingBirthdays,
         announcements,
         recentActivities,
       });

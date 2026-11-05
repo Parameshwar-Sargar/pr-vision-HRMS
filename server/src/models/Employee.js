@@ -65,7 +65,7 @@ const employeeSchema = new mongoose.Schema(
     designationId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Designation',
-      required: true,
+      default: null,
     },
     managerId: {
       type: mongoose.Schema.Types.ObjectId,

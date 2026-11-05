@@ -17,3 +17,4 @@ router.get('/audit-logs', getAuditLogs);
 router.get('/diagnostics', getSystemDiagnostics);
 
 export default router;
+

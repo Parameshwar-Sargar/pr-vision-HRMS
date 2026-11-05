@@ -24,3 +24,4 @@ router.get('/assignments', getTrainingAssignments);
 router.patch('/assignments/:id/progress', updateAssignmentProgress);
 
 export default router;
+

@@ -34,3 +34,4 @@ const salaryRevisionSchema = new mongoose.Schema(
 salaryRevisionSchema.index({ employeeId: 1, effectiveDate: -1 });
 
 export default mongoose.model('SalaryRevision', salaryRevisionSchema);
+

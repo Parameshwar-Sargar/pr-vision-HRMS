@@ -46,3 +46,4 @@ assetAssignmentSchema.index({ assetId: 1, employeeId: 1 });
 assetAssignmentSchema.index({ employeeId: 1, status: 1 });
 
 export default mongoose.model('AssetAssignment', assetAssignmentSchema);
+

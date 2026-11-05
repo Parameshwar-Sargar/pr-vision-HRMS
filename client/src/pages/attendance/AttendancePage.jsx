@@ -30,7 +30,7 @@ export default function AttendancePage() {
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [adjustForm, setAdjustForm] = useState({ checkInTime: '', checkOutTime: '', status: 'Present', notes: '' });
 
-  const isAdminOrHR = user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER';
+  const isAdminOrHR = user?.role === 'ADMIN' || user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER';
 
   useEffect(() => {
     const timer = setInterval(() => {

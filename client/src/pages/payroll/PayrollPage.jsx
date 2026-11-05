@@ -26,7 +26,7 @@ export default function PayrollPage() {
   const [runYear, setRunYear] = useState(new Date().getFullYear());
   const [processing, setProcessing] = useState(false);
 
-  const isAdminOrHR = user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER';
+  const isAdminOrHR = user?.role === 'ADMIN' || user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER' || user?.role === 'PAYROLL_ADMIN';
 
   useEffect(() => {
     fetchPayrollData();

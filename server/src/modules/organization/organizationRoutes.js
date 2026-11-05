@@ -26,3 +26,4 @@ router.put('/branches/:id', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), updateB
 router.delete('/branches/:id', requireRoles(ROLES.ADMIN), deleteBranch);
 
 export default router;
+

@@ -177,6 +177,14 @@ export const ROLE_DEFAULT_PERMISSIONS = {
   ],
 };
 
+export const TENANT_STATUS = {
+  ACTIVE: 'Active',
+  TRIAL: 'Trial',
+  SUSPENDED: 'Suspended',
+  CANCELLED: 'Cancelled',
+  EXPIRED: 'Expired',
+};
+
 export const ATTENDANCE_STATUS = {
   PRESENT: 'Present',
   LATE: 'Late',

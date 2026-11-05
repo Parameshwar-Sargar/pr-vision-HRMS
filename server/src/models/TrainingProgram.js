@@ -49,3 +49,4 @@ const trainingProgramSchema = new mongoose.Schema(
 );
 
 export default mongoose.model('TrainingProgram', trainingProgramSchema);
+

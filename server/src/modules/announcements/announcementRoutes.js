@@ -17,3 +17,4 @@ router.post('/', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), createAnnouncement
 router.delete('/:id', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), deleteAnnouncement);
 
 export default router;
+

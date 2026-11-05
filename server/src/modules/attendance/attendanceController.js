@@ -229,3 +229,29 @@ export const adjustAttendance = async (req, res, next) => {
     next(error);
   }
 };
+
+export const submitCorrectionRequest = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { requestedCheckIn, requestedCheckOut, reason } = req.body;
+
+    const record = await Attendance.findById(id);
+    if (!record) {
+      return sendError(res, 'Attendance record not found.', [], 404);
+    }
+
+    record.correctionRequest = {
+      isRequested: true,
+      requestedCheckIn: requestedCheckIn ? new Date(requestedCheckIn) : undefined,
+      requestedCheckOut: requestedCheckOut ? new Date(requestedCheckOut) : undefined,
+      reason: reason || '',
+      status: 'Pending',
+      requestedAt: new Date(),
+    };
+    await record.save();
+
+    return sendSuccess(res, 'Attendance regularization/correction request submitted.', { record });
+  } catch (error) {
+    next(error);
+  }
+};

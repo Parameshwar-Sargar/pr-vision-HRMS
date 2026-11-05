@@ -21,3 +21,4 @@ router.post('/:id/assign', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), assignAs
 router.post('/:id/return', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), returnAsset);
 
 export default router;
+

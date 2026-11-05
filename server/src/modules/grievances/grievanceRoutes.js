@@ -17,3 +17,4 @@ router.post('/', submitGrievance);
 router.patch('/:id/status', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), updateGrievanceStatus);
 
 export default router;
+

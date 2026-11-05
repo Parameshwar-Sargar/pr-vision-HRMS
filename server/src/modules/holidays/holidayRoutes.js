@@ -6,18 +6,16 @@ import {
   deleteHoliday,
 } from './holidayController.js';
 import { authenticate } from '../../middleware/authMiddleware.js';
-import { enforceTenant } from '../../middleware/tenantMiddleware.js';
 import { requireRoles } from '../../middleware/roleMiddleware.js';
 import { ROLES } from '../../config/constants.js';
 
 const router = Router();
 
-router.use(authenticate, enforceTenant);
+router.use(authenticate);
 
 router.get('/', getHolidays);
-router.post('/', requireRoles(ROLES.COMPANY_ADMIN, ROLES.HR_MANAGER), createHoliday);
-router.put('/:id', requireRoles(ROLES.COMPANY_ADMIN, ROLES.HR_MANAGER), updateHoliday);
-router.delete('/:id', requireRoles(ROLES.COMPANY_ADMIN, ROLES.HR_MANAGER), deleteHoliday);
+router.post('/', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), createHoliday);
+router.put('/:id', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), updateHoliday);
+router.delete('/:id', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), deleteHoliday);
 
 export default router;
-

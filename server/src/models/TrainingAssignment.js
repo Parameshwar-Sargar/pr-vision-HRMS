@@ -41,3 +41,4 @@ const trainingAssignmentSchema = new mongoose.Schema(
 trainingAssignmentSchema.index({ programId: 1, employeeId: 1 }, { unique: true });
 
 export default mongoose.model('TrainingAssignment', trainingAssignmentSchema);
+

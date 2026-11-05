@@ -11,21 +11,21 @@ import {
   DollarSign,
   Briefcase,
   Target,
+  GraduationCap,
+  Receipt,
+  Laptop,
+  LifeBuoy,
+  Megaphone,
   FileText,
   BarChart3,
   Settings,
-  ShieldAlert,
 } from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
-  const { user, tenant } = useSelector((state) => state.auth);
-  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const { user } = useSelector((state) => state.auth);
 
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-    ...(isSuperAdmin
-      ? [{ name: 'Super Admin Portal', path: '/super-admin', icon: ShieldAlert }]
-      : []),
     { name: 'Employees', path: '/employees', icon: Users },
     { name: 'Departments', path: '/departments', icon: Building2 },
     { name: 'Attendance', path: '/attendance', icon: CalendarCheck },
@@ -34,10 +34,15 @@ export default function Sidebar({ isOpen, onClose }) {
     { name: 'Payroll', path: '/payroll', icon: DollarSign },
     { name: 'Recruitment', path: '/recruitment', icon: Briefcase },
     { name: 'Performance', path: '/performance', icon: Target },
+    { name: 'Training', path: '/training', icon: GraduationCap },
+    { name: 'Expenses', path: '/expenses', icon: Receipt },
+    { name: 'Assets', path: '/assets', icon: Laptop },
+    { name: 'Grievances', path: '/grievances', icon: LifeBuoy },
+    { name: 'Announcements', path: '/announcements', icon: Megaphone },
     { name: 'Documents', path: '/documents', icon: FileText },
     { name: 'Reports', path: '/reports', icon: BarChart3 },
-    ...(!isSuperAdmin
-      ? [{ name: 'Company Settings', path: '/settings', icon: Settings }]
+    ...(user?.role === 'ADMIN' || user?.role === 'HR_MANAGER'
+      ? [{ name: 'Settings & Branches', path: '/settings', icon: Settings }]
       : []),
   ];
 
@@ -57,31 +62,29 @@ export default function Sidebar({ isOpen, onClose }) {
         }`}
       >
         {/* Brand Header */}
-        <div className="flex items-center gap-3 px-6 h-16 border-b border-slate-100">
+        <div className="flex items-center gap-3 px-6 h-16 border-b border-slate-100 flex-shrink-0">
           <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-blue-600 text-white font-bold text-lg shadow-sm">
             PR
           </div>
           <div className="flex flex-col">
             <span className="font-bold text-slate-900 tracking-tight text-sm">PR VISION HRMS</span>
             <span className="text-[10px] text-slate-400 font-medium tracking-wider uppercase">
-              {tenant?.name || 'Enterprise SaaS'}
+              People. Process. Performance.
             </span>
           </div>
         </div>
 
-        {/* Tenant Workspace Badge */}
-        {tenant && !isSuperAdmin && (
-          <div className="px-4 py-2.5 mx-3 mt-3 bg-blue-50/70 border border-blue-100 rounded-lg">
-            <p className="text-[11px] font-semibold text-blue-900 truncate">{tenant.name}</p>
-            <p className="text-[10px] text-blue-600 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              {tenant.planName || 'Growth'} Plan
-            </p>
-          </div>
-        )}
+        {/* Enterprise Organization Badge */}
+        <div className="px-4 py-2 mx-3 mt-3 bg-blue-50/70 border border-blue-100 rounded-lg flex-shrink-0">
+          <p className="text-[11px] font-bold text-blue-950 truncate">PR VISION INNOVATIONS</p>
+          <p className="text-[10px] text-blue-600 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            Enterprise Master Suite
+          </p>
+        </div>
 
         {/* Navigation Links */}
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -90,7 +93,7 @@ export default function Sidebar({ isOpen, onClose }) {
                 to={item.path}
                 onClick={onClose}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                  `flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
                     isActive
                       ? 'bg-blue-600 text-white shadow-sm shadow-blue-200'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
@@ -105,7 +108,7 @@ export default function Sidebar({ isOpen, onClose }) {
         </nav>
 
         {/* User Card Footer */}
-        <div className="p-3 border-t border-slate-100">
+        <div className="p-3 border-t border-slate-100 flex-shrink-0">
           <div className="flex items-center gap-3 p-2 rounded-lg bg-slate-50">
             <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs uppercase">
               {user?.name?.slice(0, 2) || 'PR'}
@@ -122,4 +125,3 @@ export default function Sidebar({ isOpen, onClose }) {
     </>
   );
 }
-

@@ -418,7 +418,9 @@ export default function EmployeesPage() {
                         <option value="EMPLOYEE">Employee</option>
                         <option value="MANAGER">Manager</option>
                         <option value="HR_MANAGER">HR Manager</option>
-                        <option value="COMPANY_ADMIN">Company Admin</option>
+                        <option value="RECRUITER">Recruiter</option>
+                        <option value="PAYROLL_ADMIN">Payroll Admin</option>
+                        <option value="ADMIN">Company Admin</option>
                       </select>
                     </div>
                   </div>
