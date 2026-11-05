@@ -36,15 +36,22 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const response = await api.post('/auth/login', { email, password });
-      const { user, accessToken, refreshToken } = response.data.data;
+      const res = await api.post('/auth/login', { email, password });
+      const payload = res?.data || res;
+      const user = payload?.user;
+      const accessToken = payload?.tokens?.accessToken || payload?.accessToken;
+      const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
+
+      if (!user || !accessToken) {
+        throw new Error('Malformed authentication response received from server.');
+      }
 
       dispatch(setCredentials({ user, accessToken, refreshToken }));
       toast.success(`Welcome back, ${user.name}!`);
 
       navigate('/dashboard');
     } catch (err) {
-      const msg = err.response?.data?.message || 'Invalid email or password.';
+      const msg = err.response?.data?.message || err.message || 'Invalid email or password.';
       setError(msg);
       toast.error(msg);
     } finally {
@@ -52,28 +59,33 @@ export default function LoginPage() {
     }
   };
 
-  const handleQuickLogin = (demoEmail, demoPassword) => {
+  const handleQuickLogin = async (demoEmail, demoPassword) => {
     setEmail(demoEmail);
     setPassword(demoPassword);
     setIsLoading(true);
     setError('');
 
-    api
-      .post('/auth/login', { email: demoEmail, password: demoPassword })
-      .then((response) => {
-        const { user, accessToken, refreshToken } = response.data.data;
-        dispatch(setCredentials({ user, accessToken, refreshToken }));
-        toast.success(`Logged in as ${user.name} (${user.role.replace('_', ' ')})`);
-        navigate('/dashboard');
-      })
-      .catch((err) => {
-        const msg = err.response?.data?.message || 'Login failed.';
-        setError(msg);
-        toast.error(msg);
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
+    try {
+      const res = await api.post('/auth/login', { email: demoEmail, password: demoPassword });
+      const payload = res?.data || res;
+      const user = payload?.user;
+      const accessToken = payload?.tokens?.accessToken || payload?.accessToken;
+      const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
+
+      if (!user || !accessToken) {
+        throw new Error('Malformed authentication response received from server.');
+      }
+
+      dispatch(setCredentials({ user, accessToken, refreshToken }));
+      toast.success(`Logged in as ${user.name} (${user.role.replace('_', ' ')})`);
+      navigate('/dashboard');
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'Login failed.';
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

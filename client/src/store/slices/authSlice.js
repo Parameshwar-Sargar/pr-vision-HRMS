@@ -8,24 +8,18 @@ const storedTenant = localStorage.getItem('pr_tenant') ? JSON.parse(localStorage
 export const loginUser = createAsyncThunk('auth/login', async (credentials, { rejectWithValue }) => {
   try {
     const res = await api.post('/auth/login', credentials);
-    const { user, tenant, tokens } = res.data;
-    localStorage.setItem('pr_access_token', tokens.accessToken);
-    localStorage.setItem('pr_user', JSON.stringify(user));
-    if (tenant) localStorage.setItem('pr_tenant', JSON.stringify(tenant));
-    return { user, tenant, token: tokens.accessToken };
-  } catch (err) {
-    return rejectWithValue(err.message);
-  }
-});
+    const payload = res?.data || res;
+    const user = payload?.user;
+    const company = payload?.company || payload?.tenant;
+    const token = payload?.tokens?.accessToken || payload?.accessToken;
+    const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
 
-export const registerCompany = createAsyncThunk('auth/registerCompany', async (data, { rejectWithValue }) => {
-  try {
-    const res = await api.post('/auth/register-company', data);
-    const { user, tenant, tokens } = res.data;
-    localStorage.setItem('pr_access_token', tokens.accessToken);
-    localStorage.setItem('pr_user', JSON.stringify(user));
-    if (tenant) localStorage.setItem('pr_tenant', JSON.stringify(tenant));
-    return { user, tenant, token: tokens.accessToken };
+    if (token) localStorage.setItem('pr_access_token', token);
+    if (refreshToken) localStorage.setItem('pr_refresh_token', refreshToken);
+    if (user) localStorage.setItem('pr_user', JSON.stringify(user));
+    if (company) localStorage.setItem('pr_company', JSON.stringify(company));
+
+    return { user, company, token };
   } catch (err) {
     return rejectWithValue(err.message);
   }
@@ -34,10 +28,15 @@ export const registerCompany = createAsyncThunk('auth/registerCompany', async (d
 export const fetchMe = createAsyncThunk('auth/fetchMe', async (_, { rejectWithValue }) => {
   try {
     const res = await api.get('/auth/me');
-    const { user, tenant, employee } = res.data;
-    localStorage.setItem('pr_user', JSON.stringify(user));
-    if (tenant) localStorage.setItem('pr_tenant', JSON.stringify(tenant));
-    return { user, tenant, employee };
+    const payload = res?.data || res;
+    const user = payload?.user;
+    const company = payload?.company || payload?.tenant;
+    const employee = payload?.employee;
+
+    if (user) localStorage.setItem('pr_user', JSON.stringify(user));
+    if (company) localStorage.setItem('pr_company', JSON.stringify(company));
+
+    return { user, company, employee };
   } catch (err) {
     return rejectWithValue(err.message);
   }
