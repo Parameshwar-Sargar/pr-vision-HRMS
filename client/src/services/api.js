@@ -24,6 +24,26 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (error.response?.status === 401) {
+      const msg = error.response?.data?.message || '';
+      if (
+        msg.includes('User account not found') ||
+        msg.includes('expired') ||
+        msg.includes('Authentication required')
+      ) {
+        localStorage.removeItem('pr_access_token');
+        localStorage.removeItem('pr_user');
+        localStorage.removeItem('pr_company');
+        if (
+          typeof window !== 'undefined' &&
+          window.location.pathname !== '/login' &&
+          window.location.pathname !== '/'
+        ) {
+          window.location.href = '/login?session_expired=true';
+        }
+      }
+    }
+
     const message =
       error.response?.data?.message ||
       error.response?.data?.errors?.[0] ||
@@ -34,4 +54,3 @@ api.interceptors.response.use(
 );
 
 export default api;
-

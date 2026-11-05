@@ -27,6 +27,11 @@ const departmentSchema = new mongoose.Schema(
       ref: 'Branch',
       default: null,
     },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,

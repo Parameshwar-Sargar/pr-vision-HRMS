@@ -25,6 +25,11 @@ const designationSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,

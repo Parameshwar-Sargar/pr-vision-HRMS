@@ -48,6 +48,7 @@ export const createDesignation = async (req, res, next) => {
       code: validated.code || validated.title.substring(0, 4).toUpperCase(),
       level: validated.level,
       description: validated.description,
+      createdBy: req.user?._id || null,
     });
 
     return sendSuccess(res, 'Designation created successfully.', { designation }, 201);

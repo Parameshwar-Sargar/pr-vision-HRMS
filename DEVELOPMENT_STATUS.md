@@ -2,9 +2,10 @@
 
 **Product**: PR VISION HRMS (People. Process. Performance.)  
 **Organization**: PR VISION INNOVATIONS  
-**Architecture**: Master Enterprise HRMS (Client-Customizable, Independently Deployable, Standalone Database per Client)  
+**Architecture**: Master Enterprise HRMS (Client-Customizable, Independently Deployable, MongoDB Atlas Cloud Persistent Database)  
+**Database**: MongoDB Atlas Cluster `PR-VISION-HRMS` (Database: `pr_vision_hrms`)  
 **Status**: ✅ 100% Complete & Production Ready  
-**Verification Date**: 2026-11-05  
+**Verification Date**: 2026-11-06  
 
 ---
 
@@ -26,11 +27,12 @@
 | **Phase 12** | Client Customization Guide, Automated Testing & Documentation | ✅ Complete | `docs/client-customization-guide.md`, 24/24 Vitest integration tests passed. |
 | **Phase 13** | Urgent UI Replacement & Complete SaaS Marketing Website Purge | ✅ Complete | Removed old SaaS landing page, pricing plans, free trial buttons, and super-admin routes; set `/` directly to enterprise login with one-click role demo credentials, forgot password recovery, and live dynamic dashboard. |
 | **Phase 14** | Frontend Blank Screen Root Cause Resolution & React Error Boundary | ✅ Complete | Resolved runtime ReferenceError in `authSlice.js` (`registerCompany` removed), added `ErrorBoundary.jsx` around root `<App />`, verified 200 OK across all transformed Vite modules and clean production build. |
+| **Phase 15** | MongoDB Atlas Cloud Migration, Department API & Master Data Resolution | ✅ Complete | Migrated from ephemeral in-memory MongoDB to permanent MongoDB Atlas cluster (`PR-VISION-HRMS`), resolved stale-token "User account not found" bug, fixed Department creation & `createdBy` attribution, enabled dynamic cascading Department & Designation dropdowns in Add Employee, seeded all 6 required enterprise departments and 8 designations. |
 
 ---
 
 ## 👥 Enterprise Roles & Access Matrix
-All accounts pre-seeded with password: `Password@123`
+All accounts pre-seeded on MongoDB Atlas with default password: `Password@123`
 
 1. **ADMIN** (`admin@prvision.com`): Master company administrator with full system permissions, branch configuration, and diagnostics.
 2. **HR_MANAGER** (`hr@prvision.com`): Employee lifecycle, onboarding, offboarding, leave approvals, and recruitment.
@@ -41,28 +43,38 @@ All accounts pre-seeded with password: `Password@123`
 
 ---
 
-## 🔍 Blank Screen Root Cause & Resolution Report
+## 🔍 Database, Master Data & Department API Audit & Fix Report
 
-1. **Exact Root Cause**:
-   - In `client/src/store/slices/authSlice.js`, when SaaS registration was removed, the declaration `export const registerCompany = createAsyncThunk(...)` was deleted.
-   - However, in `extraReducers`, lines 102, 106, and 113 still had:
-     `.addCase(registerCompany.pending, ...)`
-   - At top-level script evaluation, JavaScript threw an uncaught `ReferenceError: registerCompany is not defined`.
-   - Because `main.jsx` imports `store`, which imports `authSlice.js`, this uncaught reference error aborted module execution before `ReactDOM.createRoot` could mount into `<div id="root"></div>`, rendering a completely blank white page.
-2. **Files Modified**:
-   - `client/src/store/slices/authSlice.js`: Removed dangling `registerCompany` cases from `extraReducers`.
-   - `client/src/components/common/ErrorBoundary.jsx`: Created enterprise React Error Boundary with captured exception logs and retry/home buttons.
-   - `client/src/main.jsx`: Wrapped `<Provider store={store}><App /></Provider>` with `<ErrorBoundary>`.
-3. **Fix Implemented**:
-   - Stripped undeclared `registerCompany` from `authSlice.js`.
-   - Hardened top-level mounting with Error Boundary so any component crash renders a diagnostic recovery screen instead of a white page.
-4. **Browser Verification**:
-   - HTTP status `200 OK` on `http://localhost:5173/`.
-   - `main.jsx`, `authSlice.js`, `App.jsx`, `LoginPage.jsx`, `DashboardPage.jsx` all transform cleanly with `200 OK`.
-5. **Build Result**:
-   - `vite build` completed cleanly in `15.28s` with `0 errors`.
-6. **Remaining Issues**:
-   - None.
+### 1. Root Causes
+* **Issue 1 ("User account not found.")**:
+  - The development backend previously had `USE_MEMORY_DB=true`. Every time the backend server or watcher restarted, an ephemeral in-memory MongoDB instance was instantiated on a random port with newly generated ObjectIds.
+  - The client in the browser still possessed a JWT token issued by a previous in-memory instance.
+  - When `authMiddleware` ran `User.findById(decoded.userId)`, that user ObjectId did not exist in the new instance, returning `401 Unauthorized: "User account not found."`.
+  - In addition, the Axios response interceptor did not auto-purge expired sessions or redirect to login.
+* **Issue 2 (Empty Department & Designation Dropdowns in Add Employee)**:
+  - When the 401 error occurred, the metadata fetch for `/departments` and `/designations` silently failed, leaving state empty (`[]`).
+  - Furthermore, in the Designation filter, the expression strictly matched `des.departmentId?._id === formData.departmentId`, failing whenever `departmentId` was populated or unpopulated string ObjectId.
+* **Issue 3 (Database Persistence)**:
+  - In-memory database discarded all writes on restart.
+  - `server/.env` had pasted the Atlas connection string without the variable name prefix (`MONGODB_URI=`).
+
+### 2. Fixes Implemented
+* **MongoDB Atlas Cloud Connection**:
+  - Updated `server/src/config/db.js` to connect exclusively through `MONGODB_URI` to MongoDB Atlas database `pr_vision_hrms`.
+  - Removed all in-memory fallback logic from development and production. If connection fails, the process halts with a descriptive error.
+  - In-memory MongoDB is restricted strictly to automated tests (`NODE_ENV === 'test'`).
+  - Cleaned and masked all URI logging.
+* **Department & Designation Models**:
+  - Added `createdBy` reference to `Department.js` and `Designation.js` models.
+  - Updated `departmentController.js` and `designationController.js` to assign `createdBy: req.user._id`.
+* **Idempotent Master Data Synchronization (`seedMasterData.js`)**:
+  - Seeded all required departments: `Human Resources`, `Information Technology`, `Finance`, `Marketing`, `Sales`, `Operations`.
+  - Seeded all required designations linked to their respective departments: `HR Manager`, `HR Executive`, `Software Developer`, `Senior Developer`, `Team Leader`, `Accountant`, `Marketing Executive`, `Sales Executive`.
+  - Verified that all 6 demo accounts exist on MongoDB Atlas.
+* **Frontend Resiliency & UX**:
+  - `DepartmentsPage.jsx`: Added `isSaving` guards, button loading indicators, deduplicated toast notifications (`id: 'dept-action'`), and full error handling.
+  - `EmployeesPage.jsx`: Dynamic cascading dropdowns (selecting a Department automatically filters designations), meaningful empty states, a "+ New Department" quick shortcut modal, and robust `_id` / object string comparison.
+  - `api.js`: Interceptor automatically flushes stale `pr_access_token` on 401 `"User account not found."` and redirects cleanly to `/login`.
 
 ---
 
@@ -77,11 +89,18 @@ All accounts pre-seeded with password: `Password@123`
   ```bash
   cd server
   npm run dev
-  # Accessible at http://localhost:5000
+  # Accessible at http://localhost:5000 (Connected to MongoDB Atlas)
   ```
 
 ---
 
-## 🧪 Automated Verification Results
-- **Backend Vitest Suite**: `24/24 passed (100%)` across all 20 modules and workflow verifications.
-- **Frontend Vite Build**: Production bundling completed cleanly with 0 errors (`dist/index.html`, `dist/assets/`).
+## 🧪 Automated & Cloud Verification Results
+- **MongoDB Atlas Cloud Verification (`tests/atlasMasterDataVerification.js`)**:
+  - `TEST A`: Department creation on Atlas &rarr; Passed
+  - `TEST B`: Department update on Atlas &rarr; Passed
+  - `TEST C`: Designation creation linked to Department on Atlas &rarr; Passed
+  - `TEST D & E`: Dropdown population & relationship filtering &rarr; Passed
+  - `TEST F`: Employee registration & bidirectional User account linkage on Atlas &rarr; Passed
+  - `TEST I`: Duplicate department rejection by unique index &rarr; Passed
+- **Backend Vitest Test Suite**: `24/24 passed (100%)` across all modules.
+- **Frontend Vite Production Build**: `2106 modules transformed, 0 errors`.

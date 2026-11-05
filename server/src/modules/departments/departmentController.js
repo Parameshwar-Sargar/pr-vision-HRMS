@@ -59,6 +59,7 @@ export const createDepartment = async (req, res, next) => {
       description: validated.description,
       headId: validated.headId || null,
       branchId: validated.branchId || null,
+      createdBy: req.user?._id || null,
     });
 
     return sendSuccess(res, 'Department created successfully.', { department }, 201);
