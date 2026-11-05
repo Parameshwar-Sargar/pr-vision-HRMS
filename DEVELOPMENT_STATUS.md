@@ -25,6 +25,7 @@
 | **Phase 11** | Comprehensive Reporting, Data Exports & System Administration | ✅ Complete | CSV exports for employee/attendance/payroll, system diagnostics, audit logs. |
 | **Phase 12** | Client Customization Guide, Automated Testing & Documentation | ✅ Complete | `docs/client-customization-guide.md`, 24/24 Vitest integration tests passed. |
 | **Phase 13** | Urgent UI Replacement & Complete SaaS Marketing Website Purge | ✅ Complete | Removed old SaaS landing page, pricing plans, free trial buttons, and super-admin routes; set `/` directly to enterprise login with one-click role demo credentials, forgot password recovery, and live dynamic dashboard. |
+| **Phase 14** | Frontend Blank Screen Root Cause Resolution & React Error Boundary | ✅ Complete | Resolved runtime ReferenceError in `authSlice.js` (`registerCompany` removed), added `ErrorBoundary.jsx` around root `<App />`, verified 200 OK across all transformed Vite modules and clean production build. |
 
 ---
 
@@ -37,6 +38,31 @@ All accounts pre-seeded with password: `Password@123`
 4. **EMPLOYEE** (`employee@prvision.com`): Self-service portal, ticking clock-in/out, leave apply, payslip PDF download.
 5. **RECRUITER** (`recruiter@prvision.com`): Job requisitions, candidate pipeline, interview ratings, onboarding.
 6. **PAYROLL_ADMIN** (`payroll@prvision.com`): Salary structures, statutory compliance, monthly batch payroll runs.
+
+---
+
+## 🔍 Blank Screen Root Cause & Resolution Report
+
+1. **Exact Root Cause**:
+   - In `client/src/store/slices/authSlice.js`, when SaaS registration was removed, the declaration `export const registerCompany = createAsyncThunk(...)` was deleted.
+   - However, in `extraReducers`, lines 102, 106, and 113 still had:
+     `.addCase(registerCompany.pending, ...)`
+   - At top-level script evaluation, JavaScript threw an uncaught `ReferenceError: registerCompany is not defined`.
+   - Because `main.jsx` imports `store`, which imports `authSlice.js`, this uncaught reference error aborted module execution before `ReactDOM.createRoot` could mount into `<div id="root"></div>`, rendering a completely blank white page.
+2. **Files Modified**:
+   - `client/src/store/slices/authSlice.js`: Removed dangling `registerCompany` cases from `extraReducers`.
+   - `client/src/components/common/ErrorBoundary.jsx`: Created enterprise React Error Boundary with captured exception logs and retry/home buttons.
+   - `client/src/main.jsx`: Wrapped `<Provider store={store}><App /></Provider>` with `<ErrorBoundary>`.
+3. **Fix Implemented**:
+   - Stripped undeclared `registerCompany` from `authSlice.js`.
+   - Hardened top-level mounting with Error Boundary so any component crash renders a diagnostic recovery screen instead of a white page.
+4. **Browser Verification**:
+   - HTTP status `200 OK` on `http://localhost:5173/`.
+   - `main.jsx`, `authSlice.js`, `App.jsx`, `LoginPage.jsx`, `DashboardPage.jsx` all transform cleanly with `200 OK`.
+5. **Build Result**:
+   - `vite build` completed cleanly in `15.28s` with `0 errors`.
+6. **Remaining Issues**:
+   - None.
 
 ---
 
