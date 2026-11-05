@@ -3,12 +3,6 @@ import { ATTENDANCE_STATUS } from '../config/constants.js';
 
 const attendanceSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     employeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
@@ -36,6 +30,25 @@ const attendanceSchema = new mongoose.Schema(
     overtimeHours: {
       type: Number,
       default: 0,
+    },
+    shiftId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Shift',
+      default: null,
+    },
+    branchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null,
+    },
+    clockMethod: {
+      type: String,
+      enum: ['Web', 'Biometric', 'Mobile', 'Manual'],
+      default: 'Web',
+    },
+    biometricLogId: {
+      type: String,
+      default: null,
     },
     ipAddress: {
       type: String,
@@ -69,10 +82,10 @@ const attendanceSchema = new mongoose.Schema(
   }
 );
 
-// Crucial: Compound index preventing duplicate daily records per employee per tenant
-attendanceSchema.index({ tenantId: 1, employeeId: 1, date: 1 }, { unique: true });
-attendanceSchema.index({ tenantId: 1, date: 1 });
-attendanceSchema.index({ tenantId: 1, status: 1 });
+// One record per employee per day
+attendanceSchema.index({ employeeId: 1, date: 1 }, { unique: true });
+attendanceSchema.index({ date: 1 });
+attendanceSchema.index({ status: 1 });
+attendanceSchema.index({ branchId: 1 });
 
 export default mongoose.model('Attendance', attendanceSchema);
-

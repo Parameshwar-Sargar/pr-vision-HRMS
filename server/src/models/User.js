@@ -4,15 +4,10 @@ import { ROLES, ROLE_DEFAULT_PERMISSIONS } from '../config/constants.js';
 
 const userSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      default: null,
-      index: true,
-    },
     email: {
       type: String,
       required: [true, 'Email is required'],
+      unique: true,
       lowercase: true,
       trim: true,
     },
@@ -41,6 +36,11 @@ const userSchema = new mongoose.Schema(
       ref: 'Employee',
       default: null,
     },
+    branchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -58,31 +58,25 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Compound index: Tenant + Email must be unique per tenant
-userSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ role: 1 });
+userSchema.index({ isActive: 1 });
 
-// Pre-save password hashing
 userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
-  try {
+  if (this.isModified('password')) {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
-    // Auto-fill default permissions if none set
-    if (!this.permissions || this.permissions.length === 0) {
-      this.permissions = ROLE_DEFAULT_PERMISSIONS[this.role] || [];
-    }
-    next();
-  } catch (error) {
-    next(error);
   }
+  if (!this.permissions || this.permissions.length === 0) {
+    this.permissions = ROLE_DEFAULT_PERMISSIONS[this.role] || [];
+  }
+  next();
 });
 
-// Compare password method
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-// Safe JSON serialization (strip password and refreshToken)
 userSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.password;
@@ -91,4 +85,3 @@ userSchema.methods.toJSON = function () {
 };
 
 export default mongoose.model('User', userSchema);
-

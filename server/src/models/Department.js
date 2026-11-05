@@ -2,15 +2,10 @@ import mongoose from 'mongoose';
 
 const departmentSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     name: {
       type: String,
       required: [true, 'Department name is required'],
+      unique: true,
       trim: true,
     },
     code: {
@@ -27,6 +22,11 @@ const departmentSchema = new mongoose.Schema(
       ref: 'Employee',
       default: null,
     },
+    branchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -41,8 +41,7 @@ const departmentSchema = new mongoose.Schema(
   }
 );
 
-departmentSchema.index({ tenantId: 1, name: 1 }, { unique: true });
-departmentSchema.index({ tenantId: 1, isDeleted: 1 });
+departmentSchema.index({ name: 1 }, { unique: true });
+departmentSchema.index({ isDeleted: 1 });
 
 export default mongoose.model('Department', departmentSchema);
-

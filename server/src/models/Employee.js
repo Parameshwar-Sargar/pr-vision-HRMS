@@ -1,13 +1,8 @@
 import mongoose from 'mongoose';
+import { LIFECYCLE_STAGES } from '../config/constants.js';
 
 const employeeSchema = new mongoose.Schema(
   {
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true,
-    },
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -16,6 +11,7 @@ const employeeSchema = new mongoose.Schema(
     employeeId: {
       type: String,
       required: [true, 'Employee code/ID is required'],
+      unique: true,
       trim: true,
       uppercase: true,
     },
@@ -32,6 +28,7 @@ const employeeSchema = new mongoose.Schema(
     email: {
       type: String,
       required: [true, 'Email is required'],
+      unique: true,
       lowercase: true,
       trim: true,
     },
@@ -49,11 +46,16 @@ const employeeSchema = new mongoose.Schema(
     gender: {
       type: String,
       enum: ['Male', 'Female', 'Non-Binary', 'Other'],
-      default: 'Other',
+      default: 'Male',
     },
     joiningDate: {
       type: Date,
       default: Date.now,
+    },
+    branchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null,
     },
     departmentId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -82,8 +84,46 @@ const employeeSchema = new mongoose.Schema(
     },
     employmentStatus: {
       type: String,
-      enum: ['Active', 'On Leave', 'Probation', 'Terminated'],
-      default: 'Active',
+      enum: Object.values(LIFECYCLE_STAGES),
+      default: LIFECYCLE_STAGES.PROBATION,
+    },
+    // Lifecycle Tracking
+    probationPeriodMonths: {
+      type: Number,
+      default: 3,
+    },
+    probationEndDate: {
+      type: Date,
+    },
+    confirmationDate: {
+      type: Date,
+    },
+    resignationDate: {
+      type: Date,
+    },
+    noticePeriodDays: {
+      type: Number,
+      default: 30,
+    },
+    lastWorkingDate: {
+      type: Date,
+    },
+    exitInterviewNotes: {
+      type: String,
+      default: '',
+    },
+    fullAndFinalSettlementStatus: {
+      type: String,
+      enum: ['Not Applicable', 'Pending', 'Processed', 'Settled'],
+      default: 'Not Applicable',
+    },
+    relievingLetterIssued: {
+      type: Boolean,
+      default: false,
+    },
+    experienceLetterIssued: {
+      type: Boolean,
+      default: false,
     },
     address: {
       street: { type: String, default: '' },
@@ -104,6 +144,23 @@ const employeeSchema = new mongoose.Schema(
       ifscCode: { type: String, default: '' },
       branch: { type: String, default: '' },
     },
+    education: [
+      {
+        degree: String,
+        institution: String,
+        passingYear: Number,
+        gradeOrPercentage: String,
+      },
+    ],
+    previousEmployment: [
+      {
+        companyName: String,
+        designation: String,
+        fromDate: Date,
+        toDate: Date,
+        lastDrawnCtc: Number,
+      },
+    ],
     isDeleted: {
       type: Boolean,
       default: false,
@@ -120,13 +177,12 @@ employeeSchema.virtual('fullName').get(function () {
   return `${this.firstName} ${this.lastName}`.trim();
 });
 
-// Compound indexes ensuring strict multi-tenant isolation
-employeeSchema.index({ tenantId: 1, employeeId: 1 }, { unique: true });
-employeeSchema.index({ tenantId: 1, email: 1 });
-employeeSchema.index({ tenantId: 1, departmentId: 1 });
-employeeSchema.index({ tenantId: 1, employmentStatus: 1 });
-employeeSchema.index({ tenantId: 1, managerId: 1 });
-employeeSchema.index({ tenantId: 1, isDeleted: 1 });
+employeeSchema.index({ employeeId: 1 }, { unique: true });
+employeeSchema.index({ email: 1 }, { unique: true });
+employeeSchema.index({ departmentId: 1 });
+employeeSchema.index({ branchId: 1 });
+employeeSchema.index({ managerId: 1 });
+employeeSchema.index({ employmentStatus: 1 });
+employeeSchema.index({ isDeleted: 1 });
 
 export default mongoose.model('Employee', employeeSchema);
-
