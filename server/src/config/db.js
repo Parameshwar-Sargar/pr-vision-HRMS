@@ -3,7 +3,9 @@ import { env } from './env.js';
 
 let memoryServer = null;
 
-export const connectDB = async () => {
+let reconnectTimer = null;
+
+export const connectDB = async ({ exitOnError = false } = {}) => {
   // Use MongoMemoryServer ONLY when running automated tests
   if (env.NODE_ENV === 'test') {
     if (!memoryServer) {
@@ -20,12 +22,14 @@ export const connectDB = async () => {
   const uri = env.MONGODB_URI;
   if (!uri) {
     console.error('❌ FATAL: MONGODB_URI is not defined in environment variables.');
-    process.exit(1);
+    if (exitOnError) process.exit(1);
+    return;
   }
 
   if (uri.includes('YOUR_NEW_PASSWORD')) {
     console.error('❌ FATAL: Please replace "YOUR_NEW_PASSWORD" in server/.env with your actual MongoDB Atlas password.');
-    process.exit(1);
+    if (exitOnError) process.exit(1);
+    return;
   }
 
   // Mask credentials for secure logging
@@ -35,20 +39,49 @@ export const connectDB = async () => {
   try {
     const conn = await mongoose.connect(uri, {
       dbName: 'pr_vision_hrms',
-      serverSelectionTimeoutMS: 10000,
-      connectTimeoutMS: 15000,
+      serverSelectionTimeoutMS: 8000,
+      connectTimeoutMS: 10000,
     });
     console.log(`✅ Connected to MongoDB Atlas successfully [Host: ${conn.connection.host}, DB: ${conn.connection.name}]`);
+    if (reconnectTimer) {
+      clearInterval(reconnectTimer);
+      reconnectTimer = null;
+    }
+    return conn;
   } catch (error) {
     console.error(`❌ FATAL: Could not connect to MongoDB Atlas database: ${error.message}`);
     console.error('⚠️ Verify your internet connection, Atlas IP Access List (ensure your IP or 0.0.0.0/0 is whitelisted), and credentials in server/.env.');
     // Do NOT fall back to in-memory database in development or production
-    process.exit(1);
+    if (exitOnError) {
+      process.exit(1);
+    } else if (!reconnectTimer) {
+      console.log('🔄 Server is active on port 5000. Will retry MongoDB Atlas connection every 10 seconds...');
+      reconnectTimer = setInterval(async () => {
+        try {
+          if (mongoose.connection.readyState !== 1) {
+            await mongoose.connect(uri, {
+              dbName: 'pr_vision_hrms',
+              serverSelectionTimeoutMS: 5000,
+              connectTimeoutMS: 8000,
+            });
+            console.log(`✅ MongoDB Atlas connected successfully on retry! [DB: ${mongoose.connection.name}]`);
+            clearInterval(reconnectTimer);
+            reconnectTimer = null;
+          }
+        } catch (_) {
+          // Keep retrying quietly until whitelisted
+        }
+      }, 10000);
+    }
   }
 };
 
 export const disconnectDB = async () => {
   try {
+    if (reconnectTimer) {
+      clearInterval(reconnectTimer);
+      reconnectTimer = null;
+    }
     await mongoose.disconnect();
     if (memoryServer) {
       await memoryServer.stop();

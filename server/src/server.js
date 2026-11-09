@@ -3,18 +3,10 @@ import { connectDB, disconnectDB } from './config/db.js';
 import { env } from './config/env.js';
 import User from './models/User.js';
 import { seedDatabase } from './scripts/seed.js';
+import { seedDevAdmin } from './scripts/seedDevAdmin.js';
 
 const startServer = async () => {
   try {
-    await connectDB();
-
-    // Auto-seed if database is empty in development mode
-    const count = await User.countDocuments();
-    if (count === 0 && env.NODE_ENV !== 'production') {
-      console.log('⚡ Empty database detected. Auto-seeding initial enterprise master records...');
-      await seedDatabase({ disconnect: false });
-    }
-
     const server = app.listen(env.PORT, () => {
       console.log('========================================================');
       console.log(`🚀 PR VISION HRMS Server Running`);
@@ -24,6 +16,22 @@ const startServer = async () => {
       console.log(`✨ Tagline: People. Process. Performance.`);
       console.log('========================================================');
     });
+
+    // Attempt persistent Atlas database connection
+    try {
+      const conn = await connectDB({ exitOnError: false });
+      if (conn) {
+        const count = await User.countDocuments();
+        if (count === 0 && env.NODE_ENV !== 'production') {
+          console.log('⚡ Empty database detected. Auto-seeding initial enterprise master records...');
+          await seedDatabase({ disconnect: false });
+        } else if (env.NODE_ENV === 'development' && env.DEV_ADMIN_SEED_ENABLED) {
+          await seedDevAdmin({ disconnect: false });
+        }
+      }
+    } catch (dbErr) {
+      console.error('Database connection error:', dbErr.message);
+    }
 
     const shutdown = async (signal) => {
       console.log(`\nReceived ${signal}. Gracefully shutting down PR VISION HRMS...`);

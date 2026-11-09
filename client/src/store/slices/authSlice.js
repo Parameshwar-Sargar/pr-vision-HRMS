@@ -1,9 +1,28 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import api from '../../services/api';
 
-const storedToken = localStorage.getItem('pr_access_token');
-const storedUser = localStorage.getItem('pr_user') ? JSON.parse(localStorage.getItem('pr_user')) : null;
-const storedTenant = localStorage.getItem('pr_tenant') ? JSON.parse(localStorage.getItem('pr_tenant')) : null;
+const getInitialStoredState = () => {
+  const token =
+    localStorage.getItem('pr_access_token') ||
+    sessionStorage.getItem('pr_access_token');
+  const userRaw =
+    localStorage.getItem('pr_user') ||
+    sessionStorage.getItem('pr_user');
+  const companyRaw =
+    localStorage.getItem('pr_company') ||
+    sessionStorage.getItem('pr_company');
+
+  let user = null;
+  let company = null;
+  try {
+    if (userRaw) user = JSON.parse(userRaw);
+    if (companyRaw) company = JSON.parse(companyRaw);
+  } catch (_) {}
+
+  return { token, user, company };
+};
+
+const { token: storedToken, user: storedUser, company: storedCompany } = getInitialStoredState();
 
 export const loginUser = createAsyncThunk('auth/login', async (credentials, { rejectWithValue }) => {
   try {
@@ -13,11 +32,22 @@ export const loginUser = createAsyncThunk('auth/login', async (credentials, { re
     const company = payload?.company || payload?.tenant;
     const token = payload?.tokens?.accessToken || payload?.accessToken;
     const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
+    const rememberMe = credentials?.rememberMe ?? true;
 
-    if (token) localStorage.setItem('pr_access_token', token);
-    if (refreshToken) localStorage.setItem('pr_refresh_token', refreshToken);
-    if (user) localStorage.setItem('pr_user', JSON.stringify(user));
-    if (company) localStorage.setItem('pr_company', JSON.stringify(company));
+    const targetStorage = rememberMe ? localStorage : sessionStorage;
+    const alternateStorage = rememberMe ? sessionStorage : localStorage;
+
+    alternateStorage.removeItem('pr_access_token');
+    alternateStorage.removeItem('pr_refresh_token');
+    alternateStorage.removeItem('pr_user');
+    alternateStorage.removeItem('pr_company');
+    alternateStorage.removeItem('pr_remember_me');
+
+    if (token) targetStorage.setItem('pr_access_token', token);
+    if (refreshToken) targetStorage.setItem('pr_refresh_token', refreshToken);
+    if (user) targetStorage.setItem('pr_user', JSON.stringify(user));
+    if (company) targetStorage.setItem('pr_company', JSON.stringify(company));
+    targetStorage.setItem('pr_remember_me', rememberMe ? 'true' : 'false');
 
     return { user, company, token };
   } catch (err) {
@@ -33,8 +63,11 @@ export const fetchMe = createAsyncThunk('auth/fetchMe', async (_, { rejectWithVa
     const company = payload?.company || payload?.tenant;
     const employee = payload?.employee;
 
-    if (user) localStorage.setItem('pr_user', JSON.stringify(user));
-    if (company) localStorage.setItem('pr_company', JSON.stringify(company));
+    const rememberMe = (localStorage.getItem('pr_remember_me') !== 'false');
+    const targetStorage = rememberMe ? localStorage : sessionStorage;
+
+    if (user) targetStorage.setItem('pr_user', JSON.stringify(user));
+    if (company) targetStorage.setItem('pr_company', JSON.stringify(company));
 
     return { user, company, employee };
   } catch (err) {
@@ -49,8 +82,18 @@ export const logoutUser = createAsyncThunk('auth/logout', async () => {
     // Ignore error on logout
   }
   localStorage.removeItem('pr_access_token');
+  localStorage.removeItem('pr_refresh_token');
   localStorage.removeItem('pr_user');
+  localStorage.removeItem('pr_company');
   localStorage.removeItem('pr_tenant');
+  localStorage.removeItem('pr_remember_me');
+
+  sessionStorage.removeItem('pr_access_token');
+  sessionStorage.removeItem('pr_refresh_token');
+  sessionStorage.removeItem('pr_user');
+  sessionStorage.removeItem('pr_company');
+  sessionStorage.removeItem('pr_remember_me');
+
   return null;
 });
 
@@ -58,7 +101,8 @@ const authSlice = createSlice({
   name: 'auth',
   initialState: {
     user: storedUser,
-    tenant: storedTenant,
+    company: storedCompany,
+    tenant: storedCompany,
     token: storedToken,
     isAuthenticated: !!storedToken,
     isLoading: false,
@@ -69,15 +113,29 @@ const authSlice = createSlice({
       state.error = null;
     },
     setCredentials: (state, action) => {
-      const { user, accessToken, refreshToken } = action.payload;
+      const { user, accessToken, refreshToken, company, rememberMe = true } = action.payload;
       state.user = user;
       state.token = accessToken;
+      state.company = company || state.company;
+      state.tenant = company || state.tenant;
       state.isAuthenticated = true;
       state.isLoading = false;
       state.error = null;
-      if (accessToken) localStorage.setItem('pr_access_token', accessToken);
-      if (refreshToken) localStorage.setItem('pr_refresh_token', refreshToken);
-      if (user) localStorage.setItem('pr_user', JSON.stringify(user));
+
+      const targetStorage = rememberMe ? localStorage : sessionStorage;
+      const alternateStorage = rememberMe ? sessionStorage : localStorage;
+
+      alternateStorage.removeItem('pr_access_token');
+      alternateStorage.removeItem('pr_refresh_token');
+      alternateStorage.removeItem('pr_user');
+      alternateStorage.removeItem('pr_company');
+      alternateStorage.removeItem('pr_remember_me');
+
+      if (accessToken) targetStorage.setItem('pr_access_token', accessToken);
+      if (refreshToken) targetStorage.setItem('pr_refresh_token', refreshToken);
+      if (user) targetStorage.setItem('pr_user', JSON.stringify(user));
+      if (company) targetStorage.setItem('pr_company', JSON.stringify(company));
+      targetStorage.setItem('pr_remember_me', rememberMe ? 'true' : 'false');
     },
   },
   extraReducers: (builder) => {

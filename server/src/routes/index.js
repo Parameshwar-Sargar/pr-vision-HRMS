@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import authRoutes from '../modules/auth/authRoutes.js';
 import organizationRoutes from '../modules/organization/organizationRoutes.js';
 import dashboardRoutes from '../modules/dashboard/dashboardRoutes.js';
@@ -26,11 +27,13 @@ const router = Router();
 
 // Health check endpoint
 router.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    service: 'PR VISION HRMS API Gateway',
-    version: '1.0.0',
+  const isDbConnected = mongoose.connection.readyState === 1;
+  const dbName = mongoose.connection.name || 'pr_vision_hrms';
+  res.status(isDbConnected ? 200 : 503).json({
+    success: isDbConnected,
+    server: 'running',
+    database: isDbConnected ? 'connected' : 'disconnected',
+    databaseName: dbName,
   });
 });
 
