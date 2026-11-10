@@ -15,9 +15,14 @@ import {
   Building2,
 } from 'lucide-react';
 
+// Development auto-fill configuration (strictly eliminated in production builds)
+const isDev = import.meta.env.DEV;
+const defaultEmail = isDev ? (import.meta.env.VITE_DEV_ADMIN_EMAIL || 'admin@prvision.com') : '';
+const defaultPassword = isDev ? (import.meta.env.VITE_DEV_ADMIN_PASSWORD || 'Password@123') : '';
+
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(defaultEmail);
+  const [password, setPassword] = useState(defaultPassword);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -36,9 +41,10 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const res = await api.post('/auth/login', { email, password });
+      const res = await api.post('/auth/login', { email, password, rememberMe });
       const payload = res?.data || res;
       const user = payload?.user;
+      const company = payload?.company;
       const accessToken = payload?.tokens?.accessToken || payload?.accessToken;
       const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
 
@@ -46,12 +52,15 @@ export default function LoginPage() {
         throw new Error('Malformed authentication response received from server.');
       }
 
-      dispatch(setCredentials({ user, accessToken, refreshToken }));
+      dispatch(setCredentials({ user, accessToken, refreshToken, company, rememberMe }));
       toast.success(`Welcome back, ${user.name}!`);
 
       navigate('/dashboard');
     } catch (err) {
-      const msg = err.response?.data?.message || err.message || 'Invalid email or password.';
+      const msg =
+        err.response?.data?.message ||
+        err.message ||
+        'Authentication failed. Please verify the backend server and database connection.';
       setError(msg);
       toast.error(msg);
     } finally {
@@ -66,9 +75,10 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const res = await api.post('/auth/login', { email: demoEmail, password: demoPassword });
+      const res = await api.post('/auth/login', { email: demoEmail, password: demoPassword, rememberMe });
       const payload = res?.data || res;
       const user = payload?.user;
+      const company = payload?.company;
       const accessToken = payload?.tokens?.accessToken || payload?.accessToken;
       const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
 
@@ -76,11 +86,14 @@ export default function LoginPage() {
         throw new Error('Malformed authentication response received from server.');
       }
 
-      dispatch(setCredentials({ user, accessToken, refreshToken }));
+      dispatch(setCredentials({ user, accessToken, refreshToken, company, rememberMe }));
       toast.success(`Logged in as ${user.name} (${user.role.replace('_', ' ')})`);
       navigate('/dashboard');
     } catch (err) {
-      const msg = err.response?.data?.message || err.message || 'Login failed.';
+      const msg =
+        err.response?.data?.message ||
+        err.message ||
+        'Login failed. Please verify the backend server and database connection.';
       setError(msg);
       toast.error(msg);
     } finally {
@@ -113,7 +126,14 @@ export default function LoginPage() {
       <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-lg">
         <div className="bg-white py-8 px-6 shadow-xl shadow-slate-200/60 sm:rounded-2xl border border-slate-200/90 sm:px-10">
           <div className="mb-6">
-            <h2 className="text-lg font-bold text-slate-900">Sign in to Enterprise Workspace</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900">Sign in to Enterprise Workspace</h2>
+              {isDev && (
+                <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200/80 px-2 py-0.5 rounded-full">
+                  Dev Auto-Fill
+                </span>
+              )}
+            </div>
             <p className="text-xs text-slate-500 mt-0.5">
               Access attendance, leaves, payroll, assets, and employee operations.
             </p>
@@ -203,72 +223,74 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Quick Demo Access for Evaluation */}
-          <div className="mt-8 pt-6 border-t border-slate-200">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-800 uppercase tracking-wider">
-                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                <span>6 Core Roles Demo Access</span>
+          {/* Quick Demo Access for Development Evaluation Only */}
+          {isDev && (
+            <div className="mt-8 pt-6 border-t border-slate-200">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-800 uppercase tracking-wider">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  <span>6 Core Roles Demo Access</span>
+                </div>
+                <span className="text-[10px] font-semibold text-slate-400">Password: Password@123</span>
               </div>
-              <span className="text-[10px] font-semibold text-slate-400">Password: Password@123</span>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('admin@prvision.com', 'Password@123')}
+                  className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
+                >
+                  <div className="font-bold text-slate-900 group-hover:text-blue-700">Admin</div>
+                  <div className="text-[10px] text-slate-500">Director / Settings</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('hr@prvision.com', 'Password@123')}
+                  className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
+                >
+                  <div className="font-bold text-slate-900 group-hover:text-blue-700">HR Manager</div>
+                  <div className="text-[10px] text-slate-500">People & Lifecycle</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('manager@prvision.com', 'Password@123')}
+                  className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
+                >
+                  <div className="font-bold text-slate-900 group-hover:text-blue-700">Team Manager</div>
+                  <div className="text-[10px] text-slate-500">Approvals & KPIs</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('employee@prvision.com', 'Password@123')}
+                  className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
+                >
+                  <div className="font-bold text-slate-900 group-hover:text-blue-700">Employee</div>
+                  <div className="text-[10px] text-slate-500">Self-Service Clock</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('recruiter@prvision.com', 'Password@123')}
+                  className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
+                >
+                  <div className="font-bold text-slate-900 group-hover:text-blue-700">Recruiter</div>
+                  <div className="text-[10px] text-slate-500">ATS & Candidate Hires</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('payroll@prvision.com', 'Password@123')}
+                  className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
+                >
+                  <div className="font-bold text-slate-900 group-hover:text-blue-700">Payroll Admin</div>
+                  <div className="text-[10px] text-slate-500">Salaries & Payslips</div>
+                </button>
+              </div>
             </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('admin@prvision.com', 'Password@123')}
-                className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
-              >
-                <div className="font-bold text-slate-900 group-hover:text-blue-700">Admin</div>
-                <div className="text-[10px] text-slate-500">Director / Settings</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('hr@prvision.com', 'Password@123')}
-                className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
-              >
-                <div className="font-bold text-slate-900 group-hover:text-blue-700">HR Manager</div>
-                <div className="text-[10px] text-slate-500">People & Lifecycle</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('manager@prvision.com', 'Password@123')}
-                className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
-              >
-                <div className="font-bold text-slate-900 group-hover:text-blue-700">Team Manager</div>
-                <div className="text-[10px] text-slate-500">Approvals & KPIs</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('employee@prvision.com', 'Password@123')}
-                className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
-              >
-                <div className="font-bold text-slate-900 group-hover:text-blue-700">Employee</div>
-                <div className="text-[10px] text-slate-500">Self-Service Clock</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('recruiter@prvision.com', 'Password@123')}
-                className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
-              >
-                <div className="font-bold text-slate-900 group-hover:text-blue-700">Recruiter</div>
-                <div className="text-[10px] text-slate-500">ATS & Candidate Hires</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('payroll@prvision.com', 'Password@123')}
-                className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:border-blue-300 border border-slate-200 text-left transition-colors group"
-              >
-                <div className="font-bold text-slate-900 group-hover:text-blue-700">Payroll Admin</div>
-                <div className="text-[10px] text-slate-500">Salaries & Payslips</div>
-              </button>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Footer */}

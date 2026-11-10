@@ -42,43 +42,55 @@ import { connectDB, disconnectDB } from '../config/db.js';
 
 dotenv.config();
 
-export const seedDatabase = async ({ disconnect = true } = {}) => {
+export const seedDatabase = async ({ disconnect = true, forcePurge = false } = {}) => {
   try {
     console.log('🌱 Starting PR VISION HRMS Enterprise Database Seeding...');
     if (mongoose.connection.readyState !== 1) {
       await connectDB();
     }
 
-    // Clear previous data
-    console.log('🧹 Purging existing collections...');
-    await Promise.all([
-      User.deleteMany({}),
-      CompanySettings.deleteMany({}),
-      Branch.deleteMany({}),
-      Department.deleteMany({}),
-      Designation.deleteMany({}),
-      Shift.deleteMany({}),
-      Employee.deleteMany({}),
-      LeaveType.deleteMany({}),
-      LeaveBalance.deleteMany({}),
-      LeaveRequest.deleteMany({}),
-      Attendance.deleteMany({}),
-      Holiday.deleteMany({}),
-      SalaryStructure.deleteMany({}),
-      PayrollRun.deleteMany({}),
-      Payslip.deleteMany({}),
-      JobOpening.deleteMany({}),
-      Candidate.deleteMany({}),
-      TrainingProgram.deleteMany({}),
-      TrainingAssignment.deleteMany({}),
-      Asset.deleteMany({}),
-      AssetAssignment.deleteMany({}),
-      ExpenseClaim.deleteMany({}),
-      Grievance.deleteMany({}),
-      Announcement.deleteMany({}),
-      Notification.deleteMany({}),
-      AuditLog.deleteMany({}),
-    ]);
+    // Purge collections ONLY in test environment or when explicitly forced
+    if (process.env.NODE_ENV === 'test' || options?.forcePurge === true) {
+      console.log('🧹 Purging test collections in test environment...');
+      await Promise.all([
+        User.deleteMany({}),
+        CompanySettings.deleteMany({}),
+        Branch.deleteMany({}),
+        Department.deleteMany({}),
+        Designation.deleteMany({}),
+        Shift.deleteMany({}),
+        Employee.deleteMany({}),
+        LeaveType.deleteMany({}),
+        LeaveBalance.deleteMany({}),
+        LeaveRequest.deleteMany({}),
+        Attendance.deleteMany({}),
+        Holiday.deleteMany({}),
+        SalaryStructure.deleteMany({}),
+        PayrollRun.deleteMany({}),
+        Payslip.deleteMany({}),
+        JobOpening.deleteMany({}),
+        Candidate.deleteMany({}),
+        TrainingProgram.deleteMany({}),
+        TrainingAssignment.deleteMany({}),
+        Asset.deleteMany({}),
+        AssetAssignment.deleteMany({}),
+        ExpenseClaim.deleteMany({}),
+        Grievance.deleteMany({}),
+        Announcement.deleteMany({}),
+        Notification.deleteMany({}),
+        AuditLog.deleteMany({}),
+      ]);
+    } else {
+      console.log('🛡️ Preserving existing persistent database collections (safe idempotent mode).');
+      const existingUserCount = await User.countDocuments({});
+      if (existingUserCount > 0) {
+        console.log(`ℹ️ Persistent database contains ${existingUserCount} existing user(s). Running non-destructive master data synchronization.`);
+        const { seedMasterData } = await import('./seedMasterData.js');
+        await seedMasterData({ disconnect: false });
+        if (disconnect) await disconnectDB();
+        return;
+      }
+    }
 
     // 1. Seed Company Settings (Central Branding)
     console.log('🏢 Seeding PR VISION INNOVATIONS Company Profile & Branding...');

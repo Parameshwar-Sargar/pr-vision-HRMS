@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import morgan from 'morgan';
 import path from 'path';
+import mongoose from 'mongoose';
 import { env } from './config/env.js';
 import routes from './routes/index.js';
 import { errorHandler } from './middleware/errorMiddleware.js';
@@ -62,6 +63,31 @@ if (env.NODE_ENV !== 'test') {
 
 // Serve uploaded files statically
 app.use('/uploads', express.static(path.resolve('uploads')));
+
+// Health Check Endpoint
+app.get('/api/health', (req, res) => {
+  const isDbConnected = mongoose.connection.readyState === 1;
+  const dbName = mongoose.connection.name || 'pr_vision_hrms';
+  res.status(isDbConnected ? 200 : 503).json({
+    success: isDbConnected,
+    server: 'running',
+    database: isDbConnected ? 'connected' : 'disconnected',
+    databaseName: dbName,
+  });
+});
+
+// Guard: verify database connectivity for API operations
+app.use('/api/v1', (req, res, next) => {
+  if (req.path === '/health') return next();
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      success: false,
+      message: 'Database is currently disconnected. Please verify your MongoDB Atlas IP whitelist (Network Access: add current IP or 0.0.0.0/0).',
+      errors: ['Database unavailable'],
+    });
+  }
+  next();
+});
 
 // Mount API v1 Routes
 app.use('/api/v1', routes);

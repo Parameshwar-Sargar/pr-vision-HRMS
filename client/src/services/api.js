@@ -11,7 +11,9 @@ const api = axios.create({
 // Request interceptor to attach bearer token if stored
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('pr_access_token');
+    const token =
+      localStorage.getItem('pr_access_token') ||
+      sessionStorage.getItem('pr_access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -29,11 +31,21 @@ api.interceptors.response.use(
       if (
         msg.includes('User account not found') ||
         msg.includes('expired') ||
-        msg.includes('Authentication required')
+        msg.includes('Authentication required') ||
+        msg.includes('revoked')
       ) {
         localStorage.removeItem('pr_access_token');
+        localStorage.removeItem('pr_refresh_token');
         localStorage.removeItem('pr_user');
         localStorage.removeItem('pr_company');
+        localStorage.removeItem('pr_remember_me');
+
+        sessionStorage.removeItem('pr_access_token');
+        sessionStorage.removeItem('pr_refresh_token');
+        sessionStorage.removeItem('pr_user');
+        sessionStorage.removeItem('pr_company');
+        sessionStorage.removeItem('pr_remember_me');
+
         if (
           typeof window !== 'undefined' &&
           window.location.pathname !== '/login' &&
@@ -47,7 +59,9 @@ api.interceptors.response.use(
     const message =
       error.response?.data?.message ||
       error.response?.data?.errors?.[0] ||
-      error.message ||
+      (error.code === 'ERR_NETWORK' || error.message === 'Network Error'
+        ? 'Cannot connect to backend server (http://localhost:5000). Please ensure the backend server is running and database is reachable.'
+        : error.message) ||
       'An unexpected error occurred';
     return Promise.reject(new Error(message));
   }

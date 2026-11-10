@@ -9,6 +9,7 @@ import { logAudit } from '../../middleware/auditMiddleware.js';
 const loginSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),
+  rememberMe: z.boolean().optional().default(true),
 });
 
 export const login = async (req, res, next) => {
@@ -38,8 +39,9 @@ export const login = async (req, res, next) => {
     user.lastLoginAt = new Date();
     await user.save();
 
-    res.cookie('accessToken', tokens.accessToken, getCookieOptions());
-    res.cookie('refreshToken', tokens.refreshToken, getCookieOptions());
+    const cookieOptions = getCookieOptions({ rememberMe: validated.rememberMe });
+    res.cookie('accessToken', tokens.accessToken, cookieOptions);
+    res.cookie('refreshToken', tokens.refreshToken, cookieOptions);
 
     const company = await CompanySettings.findOne();
 
@@ -47,6 +49,7 @@ export const login = async (req, res, next) => {
       user,
       company: company || { companyName: 'PR VISION INNOVATIONS' },
       tokens,
+      rememberMe: validated.rememberMe,
     });
   } catch (error) {
     next(error);
@@ -100,8 +103,10 @@ export const logout = async (req, res, next) => {
       await User.findByIdAndUpdate(userId, { refreshToken: null });
     }
 
-    res.clearCookie('accessToken', { path: '/' });
-    res.clearCookie('refreshToken', { path: '/' });
+    const clearOpts = getCookieOptions();
+    delete clearOpts.maxAge;
+    res.clearCookie('accessToken', clearOpts);
+    res.clearCookie('refreshToken', clearOpts);
 
     return sendSuccess(res, 'Signed out successfully.');
   } catch (error) {
