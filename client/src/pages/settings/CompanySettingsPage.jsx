@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
+import { logoutUser, logoutAllSessions } from '../../store/slices/authSlice';
 import toast from 'react-hot-toast';
 import {
   Building2,
@@ -12,6 +15,11 @@ import {
   CheckCircle2,
   Sliders,
   Shield,
+  ShieldCheck,
+  Laptop,
+  LogOut,
+  RefreshCw,
+  KeyRound,
   Layers,
   Phone,
   Mail,
@@ -19,11 +27,29 @@ import {
 } from 'lucide-react';
 
 export default function CompanySettingsPage() {
-  const [activeTab, setActiveTab] = useState('general'); // 'general' | 'branches' | 'modules' | 'biometric'
+  const { user, session: reduxSession, tabId } = useSelector((state) => state.auth);
+  const dispatch = useDispatch();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const isAdminOrHR = user?.role === 'ADMIN' || user?.role === 'HR_MANAGER';
+  const queryTab = new URLSearchParams(location.search).get('tab');
+
+  const [activeTab, setActiveTab] = useState(
+    queryTab === 'security' || location.pathname === '/security' || !isAdminOrHR
+      ? 'security'
+      : 'general'
+  ); // 'general' | 'branches' | 'modules' | 'biometric' | 'security'
   const [company, setCompany] = useState(null);
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Active Sessions State
+  const [sessions, setSessions] = useState([]);
+  const [currentSession, setCurrentSession] = useState(reduxSession || null);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [revokingId, setRevokingId] = useState(null);
 
   // New Branch Modal
   const [showBranchModal, setShowBranchModal] = useState(false);
@@ -44,10 +70,75 @@ export default function CompanySettingsPage() {
   });
 
   useEffect(() => {
+    if (queryTab === 'security' || location.pathname === '/security' || !isAdminOrHR) {
+      setActiveTab('security');
+    }
+  }, [queryTab, location.pathname, isAdminOrHR]);
+
+  useEffect(() => {
     fetchOrganizationData();
+    fetchActiveSessions();
   }, []);
 
+  useEffect(() => {
+    if (activeTab === 'security') {
+      fetchActiveSessions();
+    }
+  }, [activeTab]);
+
+  const fetchActiveSessions = async () => {
+    try {
+      setLoadingSessions(true);
+      const res = await api.get('/auth/sessions');
+      const payload = res?.data || res;
+      setSessions(payload?.sessions || []);
+      if (payload?.currentSession) {
+        setCurrentSession(payload.currentSession);
+      }
+    } catch (err) {
+      // Non-blocking
+    } finally {
+      setLoadingSessions(false);
+    }
+  };
+
+  const handleRevokeSession = async (targetSessionId, isCurrent) => {
+    try {
+      setRevokingId(targetSessionId);
+      await api.delete(`/auth/sessions/${targetSessionId}`);
+      if (isCurrent) {
+        await dispatch(logoutUser());
+        toast.success('Current tab session revoked and signed out.');
+        navigate('/login');
+      } else {
+        toast.success('Session revoked successfully.');
+        fetchActiveSessions();
+      }
+    } catch (err) {
+      toast.error(err.message || 'Failed to revoke session');
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
+  const handleLogoutAllSessions = async () => {
+    try {
+      setLoadingSessions(true);
+      await dispatch(logoutAllSessions());
+      toast.success('Signed out from all active sessions across tabs and devices.');
+      navigate('/login');
+    } catch (err) {
+      toast.error(err.message || 'Failed to sign out from all sessions');
+    } finally {
+      setLoadingSessions(false);
+    }
+  };
+
   const fetchOrganizationData = async () => {
+    if (!isAdminOrHR) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const [settingsRes, branchesRes] = await Promise.all([
@@ -164,38 +255,51 @@ export default function CompanySettingsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-200 gap-6 text-xs font-bold text-slate-500">
+      <div className="flex flex-wrap border-b border-slate-200 gap-6 text-xs font-bold text-slate-500">
+        {isAdminOrHR && (
+          <>
+            <button
+              onClick={() => setActiveTab('general')}
+              className={`pb-3 transition-colors ${
+                activeTab === 'general' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
+              }`}
+            >
+              General & Branding
+            </button>
+            <button
+              onClick={() => setActiveTab('branches')}
+              className={`pb-3 transition-colors ${
+                activeTab === 'branches' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
+              }`}
+            >
+              Branches ({branches.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('modules')}
+              className={`pb-3 transition-colors ${
+                activeTab === 'modules' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
+              }`}
+            >
+              Enabled Enterprise Modules
+            </button>
+            <button
+              onClick={() => setActiveTab('biometric')}
+              className={`pb-3 transition-colors ${
+                activeTab === 'biometric' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
+              }`}
+            >
+              Biometric Hardware Integration
+            </button>
+          </>
+        )}
         <button
-          onClick={() => setActiveTab('general')}
-          className={`pb-3 transition-colors ${
-            activeTab === 'general' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
+          onClick={() => setActiveTab('security')}
+          className={`pb-3 transition-colors flex items-center gap-1.5 ${
+            activeTab === 'security' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
           }`}
         >
-          General & Branding
-        </button>
-        <button
-          onClick={() => setActiveTab('branches')}
-          className={`pb-3 transition-colors ${
-            activeTab === 'branches' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
-          }`}
-        >
-          Branches ({branches.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('modules')}
-          className={`pb-3 transition-colors ${
-            activeTab === 'modules' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
-          }`}
-        >
-          Enabled Enterprise Modules
-        </button>
-        <button
-          onClick={() => setActiveTab('biometric')}
-          className={`pb-3 transition-colors ${
-            activeTab === 'biometric' ? 'border-b-2 border-blue-600 text-blue-600' : 'hover:text-slate-800'
-          }`}
-        >
-          Biometric Hardware Integration
+          <ShieldCheck className="w-4 h-4" />
+          <span>Security & Active Sessions ({sessions.length || 1})</span>
         </button>
       </div>
 
@@ -605,6 +709,192 @@ export default function CompanySettingsPage() {
             </button>
           </div>
         </form>
+      )}
+
+      {/* TAB 5: SECURITY & ACTIVE SESSIONS */}
+      {activeTab === 'security' && (
+        <div className="space-y-6">
+          {/* Current Tab Session Identity Card */}
+          <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-blue-600" />
+                  <span>Current Tab Session & Role Identity</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  This browser tab maintains an isolated session in <code className="font-mono text-blue-700">sessionStorage</code>. Signing in or out on other tabs will not affect this tab.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchActiveSessions}
+                  disabled={loadingSessions}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingSessions ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogoutAllSessions}
+                  disabled={loadingSessions}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-sm transition-colors"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Logout From All Sessions</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Current Logged-In User
+                </span>
+                <p className="font-bold text-slate-900 text-sm mt-1">{user?.name || 'Unknown'}</p>
+                <p className="text-slate-500 text-[11px]">{user?.email}</p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Current Role & Tenant
+                </span>
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 uppercase">
+                    {user?.role}
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-mono">
+                    {currentSession?.tenantId || 'pr_vision_hrms'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Session / Device Identifier
+                </span>
+                <p className="font-mono font-bold text-slate-800 text-[11px] mt-1 truncate">
+                  {currentSession?.sessionId || sessionStorage.getItem('pr_session_id') || 'Active'}
+                </p>
+                <p className="text-[11px] text-slate-500 truncate">
+                  {currentSession?.deviceLabel || `Tab ${tabId}`}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Login Time
+                </span>
+                <p className="font-semibold text-slate-800 mt-1">
+                  {currentSession?.loginAt
+                    ? new Date(currentSession.loginAt).toLocaleString()
+                    : 'Current session'}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Last Active Time
+                </span>
+                <p className="font-semibold text-slate-800 mt-1">
+                  {currentSession?.lastActiveAt
+                    ? new Date(currentSession.lastActiveAt).toLocaleString()
+                    : 'Just now'}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Session Expiry
+                </span>
+                <p className="font-semibold text-slate-800 mt-1">
+                  {currentSession?.expiresAt
+                    ? new Date(currentSession.expiresAt).toLocaleString()
+                    : '7 days from login'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Active Sessions List */}
+          <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Laptop className="w-4 h-4 text-blue-600" />
+                  <span>Active Sessions for {user?.email} ({sessions.length})</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Manage and revoke individual browser tab or device sessions without exposing tokens.
+                </p>
+              </div>
+            </div>
+
+            {sessions.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl">
+                No active sessions found.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
+                {sessions.map((s) => (
+                  <div
+                    key={s.sessionId}
+                    className={`p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 text-xs ${
+                      s.isCurrentSession ? 'bg-blue-50/40' : 'bg-white'
+                    }`}
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-slate-900">{s.deviceLabel || 'Browser Session'}</span>
+                        {s.isCurrentSession ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                            Current Tab Session
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">
+                            Other Tab / Device
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-100 text-slate-700">
+                          ID: {s.sessionId}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                        <span>Role: <strong className="text-slate-700">{s.role}</strong></span>
+                        <span>IP: <strong className="text-slate-700">{s.ipAddress || '127.0.0.1'}</strong></span>
+                        <span>Login: <strong className="text-slate-700">{new Date(s.loginAt).toLocaleString()}</strong></span>
+                        <span>Last Active: <strong className="text-slate-700">{new Date(s.lastActiveAt).toLocaleString()}</strong></span>
+                        <span>Expires: <strong className="text-slate-700">{new Date(s.expiresAt).toLocaleDateString()}</strong></span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-end sm:self-center">
+                      <button
+                        type="button"
+                        disabled={revokingId === s.sessionId}
+                        onClick={() => handleRevokeSession(s.sessionId, s.isCurrentSession)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                          s.isCurrentSession
+                            ? 'border border-rose-200 text-rose-700 hover:bg-rose-50'
+                            : 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
+                        }`}
+                      >
+                        {revokingId === s.sessionId
+                          ? 'Revoking...'
+                          : s.isCurrentSession
+                          ? 'Revoke & Sign Out Tab'
+                          : 'Revoke Session'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* ADD BRANCH MODAL */}

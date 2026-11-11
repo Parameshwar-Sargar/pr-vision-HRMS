@@ -11,18 +11,30 @@ export const getTrainingPrograms = async (req, res, next) => {
     if (category) query.category = category;
     if (status) query.status = status;
 
-    const programs = await TrainingProgram.find(query).sort({ startDate: 1 });
+    const [programs, counts] = await Promise.all([
+      TrainingProgram.find(query).sort({ startDate: 1 }).lean(),
+      TrainingAssignment.aggregate([
+        {
+          $group: {
+            _id: '$programId',
+            enrolled: { $sum: 1 },
+            completed: {
+              $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] },
+            },
+          },
+        },
+      ]),
+    ]);
 
-    const programsWithCount = await Promise.all(
-      programs.map(async (p) => {
-        const enrolled = await TrainingAssignment.countDocuments({ programId: p._id });
-        const completed = await TrainingAssignment.countDocuments({ programId: p._id, status: 'Completed' });
-        const obj = p.toObject();
-        obj.enrolledCount = enrolled;
-        obj.completedCount = completed;
-        return obj;
-      })
-    );
+    const countMap = new Map(counts.map((c) => [c._id?.toString(), c]));
+    const programsWithCount = programs.map((p) => {
+      const c = countMap.get(p._id.toString());
+      return {
+        ...p,
+        enrolledCount: c?.enrolled || 0,
+        completedCount: c?.completed || 0,
+      };
+    });
 
     return sendSuccess(res, 'Training programs retrieved.', { programs: programsWithCount });
   } catch (error) {
@@ -100,9 +112,20 @@ export const getTrainingAssignments = async (req, res, next) => {
     const query = {};
 
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      if (!myEmp) return sendSuccess(res, 'No assignments found.', { assignments: [] });
-      query.employeeId = myEmp._id;
+      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No assignments found.', { assignments: [] });
+      query.employeeId = req.verifiedEmployeeId;
+    } else if (req.user.role === ROLES.MANAGER) {
+      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No assignments found.', { assignments: [] });
+      const team = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id');
+      const allowedIds = [...team.map((t) => t._id), req.verifiedEmployeeId];
+      if (employeeId) {
+        if (!allowedIds.some((id) => id.toString() === employeeId.toString())) {
+          return sendError(res, 'Access denied: You can only view training assignments for your reporting team.', [], 403);
+        }
+        query.employeeId = employeeId;
+      } else {
+        query.employeeId = { $in: allowedIds };
+      }
     } else if (employeeId) {
       query.employeeId = employeeId;
     }

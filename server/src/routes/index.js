@@ -29,11 +29,13 @@ const router = Router();
 router.get('/health', (req, res) => {
   const isDbConnected = mongoose.connection.readyState === 1;
   const dbName = mongoose.connection.name || 'pr_vision_hrms';
+  const uptimeSeconds = Math.floor(process.uptime());
   res.status(isDbConnected ? 200 : 503).json({
     success: isDbConnected,
     server: 'running',
     database: isDbConnected ? 'connected' : 'disconnected',
     databaseName: dbName,
+    uptime: uptimeSeconds,
   });
 });
 

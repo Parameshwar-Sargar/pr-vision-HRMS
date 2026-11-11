@@ -69,5 +69,6 @@ const grievanceSchema = new mongoose.Schema(
 );
 
 grievanceSchema.index({ employeeId: 1, status: 1 });
+grievanceSchema.index({ status: 1, createdAt: -1 });
 
 export default mongoose.model('Grievance', grievanceSchema);

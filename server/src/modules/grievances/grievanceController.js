@@ -10,9 +10,11 @@ export const getGrievances = async (req, res, next) => {
     const query = {};
 
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      if (!myEmp) return sendSuccess(res, 'No tickets found.', { grievances: [] });
-      query.employeeId = myEmp._id;
+      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No tickets found.', { grievances: [] });
+      query.employeeId = req.verifiedEmployeeId;
+    } else if (req.user.role === ROLES.MANAGER) {
+      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No tickets found.', { grievances: [] });
+      query.$or = [{ employeeId: req.verifiedEmployeeId }, { assignedTo: req.user._id }];
     }
 
     if (status) query.status = status;

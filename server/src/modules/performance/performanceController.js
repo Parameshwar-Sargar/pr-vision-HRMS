@@ -9,14 +9,19 @@ export const getPerformanceReviews = async (req, res, next) => {
     const query = {};
 
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      if (!myEmp) return sendSuccess(res, 'No records', { reviews: [] });
-      query.employeeId = myEmp._id;
+      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No records', { reviews: [] });
+      query.employeeId = req.verifiedEmployeeId;
     } else if (req.user.role === ROLES.MANAGER) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      if (myEmp) {
-        const team = await Employee.find({ managerId: myEmp._id, isDeleted: false }).select('_id');
-        query.$or = [{ employeeId: myEmp._id }, { employeeId: { $in: team.map((t) => t._id) } }];
+      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No records', { reviews: [] });
+      const team = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id');
+      const allowedIds = [...team.map((t) => t._id), req.verifiedEmployeeId];
+      if (employeeId) {
+        if (!allowedIds.some((id) => id.toString() === employeeId.toString())) {
+          return sendError(res, 'Access denied: You can only view performance reviews for your direct reporting team.', [], 403);
+        }
+        query.employeeId = employeeId;
+      } else {
+        query.employeeId = { $in: allowedIds };
       }
     } else if (employeeId) {
       query.employeeId = employeeId;
@@ -69,6 +74,12 @@ export const submitEmployeeSelfReview = async (req, res, next) => {
     const review = await PerformanceReview.findById(id);
     if (!review) return sendError(res, 'Review not found.', [], 404);
 
+    if (req.user.role === ROLES.EMPLOYEE) {
+      if (!req.verifiedEmployeeId || review.employeeId.toString() !== req.verifiedEmployeeId.toString()) {
+        return sendError(res, 'Access denied: You can only submit self-evaluations for your own performance review.', [], 403);
+      }
+    }
+
     if (selfRating) review.selfRating = selfRating;
     if (goals) review.goals = goals;
     if (comments) review.comments = comments;
@@ -88,6 +99,22 @@ export const submitManagerReview = async (req, res, next) => {
 
     const review = await PerformanceReview.findById(id);
     if (!review) return sendError(res, 'Review not found.', [], 404);
+
+    if (req.user.role === ROLES.EMPLOYEE) {
+      return sendError(res, 'Access denied: Employees cannot submit manager evaluations.', [], 403);
+    }
+
+    if (req.user.role === ROLES.MANAGER) {
+      const applicant = await Employee.findById(review.employeeId);
+      if (
+        !applicant ||
+        !applicant.managerId ||
+        !req.verifiedEmployeeId ||
+        applicant.managerId.toString() !== req.verifiedEmployeeId.toString()
+      ) {
+        return sendError(res, 'Access denied: You can only evaluate performance reviews for your direct reporting team.', [], 403);
+      }
+    }
 
     if (managerRating) review.managerRating = managerRating;
     if (finalScore) review.finalScore = finalScore;

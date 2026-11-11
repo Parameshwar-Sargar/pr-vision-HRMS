@@ -28,11 +28,11 @@ export default function AnnouncementsPage() {
 
   const canManage = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
 
-  const fetchAnnouncements = async () => {
-    setIsLoading(true);
+  const fetchAnnouncements = async (showSpinner = false) => {
+    if (showSpinner) setIsLoading(true);
     try {
       const res = await api.get('/announcements');
-      setAnnouncements(res.data.data.announcements || []);
+      setAnnouncements(res.data?.announcements || res.announcements || []);
     } catch (err) {
       toast.error('Failed to load notices.');
     } finally {
@@ -41,29 +41,35 @@ export default function AnnouncementsPage() {
   };
 
   useEffect(() => {
-    fetchAnnouncements();
+    fetchAnnouncements(true);
   }, []);
 
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/announcements', newNotice);
+      const res = await api.post('/announcements', newNotice);
+      const created = res?.data?.announcement || res?.announcement;
+      if (created) {
+        setAnnouncements((prev) => [created, ...prev]);
+      }
       toast.success('Announcement broadcasted successfully!');
       setShowAddModal(false);
-      fetchAnnouncements();
+      fetchAnnouncements(false);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to post announcement.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to post announcement.');
     }
   };
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this announcement?')) return;
     try {
+      setAnnouncements((prev) => prev.filter((a) => a._id !== id));
       await api.delete(`/announcements/${id}`);
       toast.success('Announcement deleted.');
-      fetchAnnouncements();
+      fetchAnnouncements(false);
     } catch (err) {
       toast.error('Failed to delete.');
+      fetchAnnouncements(false);
     }
   };
 

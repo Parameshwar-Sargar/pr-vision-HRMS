@@ -66,6 +66,8 @@ const expenseClaimSchema = new mongoose.Schema(
 );
 
 expenseClaimSchema.index({ employeeId: 1, status: 1 });
+expenseClaimSchema.index({ status: 1, createdAt: -1 });
+expenseClaimSchema.index({ date: -1 });
 
 export default mongoose.model('ExpenseClaim', expenseClaimSchema);
 

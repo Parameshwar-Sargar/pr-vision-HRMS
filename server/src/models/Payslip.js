@@ -85,5 +85,7 @@ const payslipSchema = new mongoose.Schema(
 
 payslipSchema.index({ employeeId: 1, month: 1, year: 1 }, { unique: true });
 payslipSchema.index({ payrollRunId: 1 });
+payslipSchema.index({ year: -1, month: -1 });
+payslipSchema.index({ paymentStatus: 1 });
 
 export default mongoose.model('Payslip', payslipSchema);

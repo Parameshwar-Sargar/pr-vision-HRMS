@@ -178,9 +178,16 @@ employeeSchema.virtual('fullName').get(function () {
 });
 
 employeeSchema.index({ departmentId: 1 });
+employeeSchema.index({ designationId: 1 });
 employeeSchema.index({ branchId: 1 });
 employeeSchema.index({ managerId: 1 });
+employeeSchema.index({ userId: 1 });
 employeeSchema.index({ employmentStatus: 1 });
 employeeSchema.index({ isDeleted: 1 });
+employeeSchema.index({ joiningDate: -1 });
+employeeSchema.index({ createdAt: -1 });
+employeeSchema.index({ isDeleted: 1, employmentStatus: 1 });
+employeeSchema.index({ isDeleted: 1, departmentId: 1 });
+employeeSchema.index({ isDeleted: 1, managerId: 1 });
 
 export default mongoose.model('Employee', employeeSchema);

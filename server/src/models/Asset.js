@@ -53,5 +53,7 @@ const assetSchema = new mongoose.Schema(
 );
 
 assetSchema.index({ status: 1 });
+assetSchema.index({ currentAssignedTo: 1 });
+assetSchema.index({ createdAt: -1 });
 
 export default mongoose.model('Asset', assetSchema);

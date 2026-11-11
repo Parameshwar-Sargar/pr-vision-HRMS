@@ -40,16 +40,16 @@ export default function AttendancePage() {
   }, []);
 
   useEffect(() => {
-    fetchAttendance();
+    fetchAttendance(attendance.length === 0);
   }, [statusFilter]);
 
-  const fetchAttendance = async () => {
+  const fetchAttendance = async (showSkeleton = false) => {
     try {
-      setLoading(true);
+      if (showSkeleton) setLoading(true);
       const params = {};
       if (statusFilter) params.status = statusFilter;
       const res = await api.get('/attendance', { params });
-      setAttendance(res.data.attendance || []);
+      setAttendance(res.data?.attendance || res.attendance || []);
     } catch (err) {
       toast.error('Failed to load attendance records');
     } finally {
@@ -58,11 +58,16 @@ export default function AttendancePage() {
   };
 
   const handleClockIn = async () => {
+    if (clockLoading) return;
     try {
       setClockLoading(true);
       const res = await api.post('/attendance/check-in');
-      toast.success(res.message);
-      fetchAttendance();
+      const record = res?.data?.record || res?.record;
+      if (record) {
+        setAttendance((prev) => [record, ...prev.filter((r) => r._id !== record._id)]);
+      }
+      toast.success(res.message || 'Checked in successfully!');
+      fetchAttendance(false);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -71,11 +76,16 @@ export default function AttendancePage() {
   };
 
   const handleClockOut = async () => {
+    if (clockLoading) return;
     try {
       setClockLoading(true);
       const res = await api.post('/attendance/check-out');
-      toast.success(res.message);
-      fetchAttendance();
+      const record = res?.data?.record || res?.record;
+      if (record) {
+        setAttendance((prev) => prev.map((r) => (r._id === record._id ? { ...r, ...record } : r)));
+      }
+      toast.success(res.message || 'Checked out successfully!');
+      fetchAttendance(false);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -86,10 +96,14 @@ export default function AttendancePage() {
   const handleAdjustSubmit = async (e) => {
     e.preventDefault();
     try {
-      await api.patch(`/attendance/${selectedRecord._id}/adjust`, adjustForm);
+      const res = await api.patch(`/attendance/${selectedRecord._id}/adjust`, adjustForm);
+      const updated = res?.data?.record || res?.record;
+      if (updated) {
+        setAttendance((prev) => prev.map((r) => (r._id === updated._id ? { ...r, ...updated } : r)));
+      }
       toast.success('Attendance adjusted successfully');
       setSelectedRecord(null);
-      fetchAttendance();
+      fetchAttendance(false);
     } catch (err) {
       toast.error(err.message || 'Adjustment failed');
     }

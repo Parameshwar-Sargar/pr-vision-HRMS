@@ -33,7 +33,14 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-target-tenant'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'x-target-tenant',
+      'X-Tab-Id',
+      'X-Session-Id',
+    ],
   })
 );
 
@@ -68,11 +75,13 @@ app.use('/uploads', express.static(path.resolve('uploads')));
 app.get('/api/health', (req, res) => {
   const isDbConnected = mongoose.connection.readyState === 1;
   const dbName = mongoose.connection.name || 'pr_vision_hrms';
+  const uptimeSeconds = Math.floor(process.uptime());
   res.status(isDbConnected ? 200 : 503).json({
     success: isDbConnected,
     server: 'running',
     database: isDbConnected ? 'connected' : 'disconnected',
     databaseName: dbName,
+    uptime: uptimeSeconds,
   });
 });
 

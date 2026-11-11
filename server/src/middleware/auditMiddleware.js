@@ -16,7 +16,8 @@ export const logAudit = async ({
     const ipAddress = req.ip || req.connection?.remoteAddress || '';
     const userAgent = req.headers['user-agent'] || '';
 
-    await AuditLog.create({
+    // Non-blocking audit persistence to avoid adding write latency to API responses
+    AuditLog.create({
       actorId,
       actorEmail,
       actorRole,
@@ -26,6 +27,8 @@ export const logAudit = async ({
       details,
       ipAddress,
       userAgent,
+    }).catch((err) => {
+      console.warn('Audit Logging Warning:', err.message);
     });
   } catch (err) {
     console.warn('Audit Logging Warning:', err.message);

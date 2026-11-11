@@ -10,14 +10,19 @@ export const getExpenseClaims = async (req, res, next) => {
     const query = {};
 
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      if (!myEmp) return sendSuccess(res, 'No records found.', { claims: [] });
-      query.employeeId = myEmp._id;
+      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No records found.', { claims: [] });
+      query.employeeId = req.verifiedEmployeeId;
     } else if (req.user.role === ROLES.MANAGER) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      if (myEmp) {
-        const team = await Employee.find({ managerId: myEmp._id, isDeleted: false }).select('_id');
-        query.$or = [{ employeeId: myEmp._id }, { employeeId: { $in: team.map((t) => t._id) } }];
+      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No records found.', { claims: [] });
+      const team = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id');
+      const allowedIds = [...team.map((t) => t._id), req.verifiedEmployeeId];
+      if (employeeId) {
+        if (!allowedIds.some((id) => id.toString() === employeeId.toString())) {
+          return sendError(res, 'Access denied: You can only view claims for yourself and your team.', [], 403);
+        }
+        query.employeeId = employeeId;
+      } else {
+        query.employeeId = { $in: allowedIds };
       }
     } else if (employeeId) {
       query.employeeId = employeeId;
@@ -81,6 +86,22 @@ export const reviewExpenseClaim = async (req, res, next) => {
 
     const claim = await ExpenseClaim.findById(id);
     if (!claim) return sendError(res, 'Expense claim not found.', [], 404);
+
+    if (req.user.role === ROLES.EMPLOYEE) {
+      return sendError(res, 'Access denied: Employees cannot approve or reject expense claims.', [], 403);
+    }
+
+    if (req.user.role === ROLES.MANAGER) {
+      const applicant = await Employee.findById(claim.employeeId);
+      if (
+        !applicant ||
+        !applicant.managerId ||
+        !req.verifiedEmployeeId ||
+        applicant.managerId.toString() !== req.verifiedEmployeeId.toString()
+      ) {
+        return sendError(res, 'Access denied: You can only review expense claims for your direct reporting team.', [], 403);
+      }
+    }
 
     claim.status = status;
     claim.approvedBy = req.user._id;

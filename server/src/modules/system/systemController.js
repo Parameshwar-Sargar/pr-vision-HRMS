@@ -36,12 +36,15 @@ export const getAuditLogs = async (req, res, next) => {
     if (entity) query.entity = entity;
 
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    const total = await AuditLog.countDocuments(query);
-    const logs = await AuditLog.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit, 10))
-      .populate('actorId', 'name email role');
+    const [total, logs] = await Promise.all([
+      AuditLog.countDocuments(query),
+      AuditLog.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit, 10))
+        .populate('actorId', 'name email role')
+        .lean(),
+    ]);
 
     return sendSuccess(res, 'Audit logs retrieved.', {
       logs,
@@ -58,9 +61,11 @@ export const getAuditLogs = async (req, res, next) => {
 
 export const getSystemDiagnostics = async (req, res, next) => {
   try {
-    const totalUsers = await User.countDocuments();
-    const activeUsers = await User.countDocuments({ isActive: true });
-    const totalEmployees = await Employee.countDocuments({ isDeleted: false });
+    const [totalUsers, activeUsers, totalEmployees] = await Promise.all([
+      User.countDocuments(),
+      User.countDocuments({ isActive: true }),
+      Employee.countDocuments({ isDeleted: false }),
+    ]);
 
     const uptimeSeconds = Math.floor(process.uptime());
     const memoryUsage = process.memoryUsage();

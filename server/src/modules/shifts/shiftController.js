@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import Shift from '../../models/Shift.js';
+import { ROLES } from '../../config/constants.js';
 import { sendSuccess, sendError } from '../../utils/responseUtils.js';
 
 const shiftSchema = z.object({
@@ -17,7 +18,18 @@ const shiftSchema = z.object({
 
 export const getShifts = async (req, res, next) => {
   try {
-    const shifts = await Shift.find({ isActive: true }).sort({ createdAt: -1 });
+    let query = { isActive: true };
+
+    // Strict Data Isolation: Employees only view their assigned shift
+    if (req.user.role === ROLES.EMPLOYEE) {
+      if (req.employee?.shiftId) {
+        query = { _id: req.employee.shiftId, isActive: true };
+      } else {
+        query = { isDefault: true, isActive: true };
+      }
+    }
+
+    const shifts = await Shift.find(query).sort({ createdAt: -1 });
     return sendSuccess(res, 'Shifts retrieved.', { shifts });
   } catch (error) {
     next(error);

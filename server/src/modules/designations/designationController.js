@@ -21,7 +21,8 @@ export const getDesignations = async (req, res, next) => {
 
     const designations = await Designation.find(query)
       .populate('departmentId', 'name code')
-      .sort({ level: 1, title: 1 });
+      .sort({ level: 1, title: 1 })
+      .lean();
 
     return sendSuccess(res, 'Designations retrieved.', { designations });
   } catch (error) {
@@ -37,12 +38,12 @@ export const createDesignation = async (req, res, next) => {
       title: { $regex: new RegExp(`^${validated.title}$`, 'i') },
       departmentId: validated.departmentId,
       isDeleted: false,
-    });
+    }).lean();
     if (exists) {
       return sendError(res, 'This designation already exists in this department.', [], 409);
     }
 
-    const designation = await Designation.create({
+    const created = await Designation.create({
       title: validated.title,
       departmentId: validated.departmentId,
       code: validated.code || validated.title.substring(0, 4).toUpperCase(),
@@ -50,6 +51,10 @@ export const createDesignation = async (req, res, next) => {
       description: validated.description,
       createdBy: req.user?._id || null,
     });
+
+    const designation = await Designation.findById(created._id)
+      .populate('departmentId', 'name code')
+      .lean();
 
     return sendSuccess(res, 'Designation created successfully.', { designation }, 201);
   } catch (error) {

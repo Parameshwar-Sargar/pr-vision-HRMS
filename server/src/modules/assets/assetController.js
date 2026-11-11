@@ -8,6 +8,21 @@ export const getAssets = async (req, res, next) => {
   try {
     const { category, status } = req.query;
     const query = {};
+
+    // Strict Role-Based Isolation: Employees only view their assigned assets
+    if (req.user.role === ROLES.EMPLOYEE) {
+      if (!req.verifiedEmployeeId) {
+        return sendSuccess(res, 'No assigned assets found.', { assets: [] });
+      }
+      query.currentAssignedTo = req.verifiedEmployeeId;
+    } else if (req.user.role === ROLES.MANAGER) {
+      if (req.query.teamOnly === 'true' && req.verifiedEmployeeId) {
+        const teamEmployees = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id');
+        const allowedIds = [...teamEmployees.map((t) => t._id), req.verifiedEmployeeId];
+        query.currentAssignedTo = { $in: allowedIds };
+      }
+    }
+
     if (category) query.category = category;
     if (status) query.status = status;
 

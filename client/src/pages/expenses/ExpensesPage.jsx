@@ -29,11 +29,11 @@ export default function ExpensesPage() {
 
   const canApprove = ['ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN', 'MANAGER'].includes(user?.role);
 
-  const fetchClaims = async () => {
-    setIsLoading(true);
+  const fetchClaims = async (showSpinner = false) => {
+    if (showSpinner) setIsLoading(true);
     try {
       const res = await api.get('/expenses');
-      setClaims(res.data.data.claims || []);
+      setClaims(res.data?.claims || res.claims || []);
     } catch (err) {
       toast.error('Failed to load expense claims.');
     } finally {
@@ -42,28 +42,34 @@ export default function ExpensesPage() {
   };
 
   useEffect(() => {
-    fetchClaims();
+    fetchClaims(true);
   }, []);
 
   const handleSubmitClaim = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/expenses', newClaim);
+      const res = await api.post('/expenses', newClaim);
+      const created = res?.data?.claim || res?.claim;
+      if (created) {
+        setClaims((prev) => [created, ...prev]);
+      }
       toast.success('Expense claim submitted successfully!');
       setShowApplyModal(false);
-      fetchClaims();
+      fetchClaims(false);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to submit claim.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to submit claim.');
     }
   };
 
   const handleReview = async (claimId, status) => {
     try {
+      setClaims((prev) => prev.map((c) => (c._id === claimId ? { ...c, status } : c)));
       await api.patch(`/expenses/${claimId}/review`, { status });
       toast.success(`Claim ${status.toLowerCase()}!`);
-      fetchClaims();
+      fetchClaims(false);
     } catch (err) {
       toast.error('Failed to update status.');
+      fetchClaims(false);
     }
   };
 

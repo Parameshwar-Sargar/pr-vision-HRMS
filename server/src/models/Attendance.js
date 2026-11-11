@@ -85,7 +85,9 @@ const attendanceSchema = new mongoose.Schema(
 // One record per employee per day
 attendanceSchema.index({ employeeId: 1, date: 1 }, { unique: true });
 attendanceSchema.index({ date: 1 });
+attendanceSchema.index({ date: -1, status: 1 });
 attendanceSchema.index({ status: 1 });
 attendanceSchema.index({ branchId: 1 });
+attendanceSchema.index({ createdAt: -1 });
 
 export default mongoose.model('Attendance', attendanceSchema);

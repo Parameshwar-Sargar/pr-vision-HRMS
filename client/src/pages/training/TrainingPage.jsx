@@ -36,15 +36,15 @@ export default function TrainingPage() {
 
   const canManage = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
 
-  const fetchTrainingData = async () => {
-    setIsLoading(true);
+  const fetchTrainingData = async (showSpinner = false) => {
+    if (showSpinner) setIsLoading(true);
     try {
       const [progRes, assignRes] = await Promise.all([
         api.get('/training/programs'),
         api.get('/training/assignments'),
       ]);
-      setPrograms(progRes.data.data.programs || []);
-      setAssignments(assignRes.data.data.assignments || []);
+      setPrograms(progRes.data?.programs || progRes.programs || []);
+      setAssignments(assignRes.data?.assignments || assignRes.assignments || []);
     } catch (err) {
       toast.error('Failed to load training data.');
     } finally {
@@ -53,32 +53,40 @@ export default function TrainingPage() {
   };
 
   useEffect(() => {
-    fetchTrainingData();
+    fetchTrainingData(true);
   }, []);
 
   const handleCreateProgram = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/training/programs', newProgram);
+      const res = await api.post('/training/programs', newProgram);
+      const created = res?.data?.program || res?.program;
+      if (created) {
+        setPrograms((prev) => [created, ...prev]);
+      }
       toast.success('Training program created successfully!');
       setShowAddModal(false);
-      fetchTrainingData();
+      fetchTrainingData(false);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to create program.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to create program.');
     }
   };
 
   const handleMarkCompleted = async (assignmentId) => {
     try {
+      setAssignments((prev) =>
+        prev.map((a) => (a._id === assignmentId ? { ...a, status: 'Completed', score: 100 } : a))
+      );
       await api.patch(`/training/assignments/${assignmentId}/progress`, {
         status: 'Completed',
         score: 100,
         feedback: 'Completed self-paced training module.',
       });
       toast.success('Marked as Completed!');
-      fetchTrainingData();
+      fetchTrainingData(false);
     } catch (err) {
       toast.error('Failed to update progress.');
+      fetchTrainingData(false);
     }
   };
 

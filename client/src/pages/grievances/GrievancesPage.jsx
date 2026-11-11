@@ -30,11 +30,11 @@ export default function GrievancesPage() {
 
   const canResolve = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
 
-  const fetchGrievances = async () => {
-    setIsLoading(true);
+  const fetchGrievances = async (showSpinner = false) => {
+    if (showSpinner) setIsLoading(true);
     try {
       const res = await api.get('/grievances');
-      setGrievances(res.data.data.grievances || []);
+      setGrievances(res.data?.grievances || res.grievances || []);
     } catch (err) {
       toast.error('Failed to load tickets.');
     } finally {
@@ -43,24 +43,33 @@ export default function GrievancesPage() {
   };
 
   useEffect(() => {
-    fetchGrievances();
+    fetchGrievances(true);
   }, []);
 
   const handleSubmitTicket = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/grievances', newGrievance);
+      const res = await api.post('/grievances', newGrievance);
+      const created = res?.data?.grievance || res?.grievance;
+      if (created) {
+        setGrievances((prev) => [created, ...prev]);
+      }
       toast.success('Ticket submitted to HR Redressal Committee!');
       setShowCreateModal(false);
-      fetchGrievances();
+      fetchGrievances(false);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to file ticket.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to file ticket.');
     }
   };
 
   const handleResolveTicket = async (e) => {
     e.preventDefault();
     try {
+      setGrievances((prev) =>
+        prev.map((g) =>
+          g._id === resolveModalItem._id ? { ...g, status: 'Resolved', resolutionNotes } : g
+        )
+      );
       await api.patch(`/grievances/${resolveModalItem._id}/status`, {
         status: 'Resolved',
         resolutionNotes,
@@ -68,9 +77,10 @@ export default function GrievancesPage() {
       toast.success('Ticket marked as Resolved!');
       setResolveModalItem(null);
       setResolutionNotes('');
-      fetchGrievances();
+      fetchGrievances(false);
     } catch (err) {
       toast.error('Failed to update ticket.');
+      fetchGrievances(false);
     }
   };
 

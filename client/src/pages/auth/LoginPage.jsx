@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
 import { setCredentials } from '../../store/slices/authSlice';
-import api from '../../services/api';
+import api, { getTabId } from '../../services/api';
 import { toast } from 'react-hot-toast';
 import {
   Lock,
@@ -33,7 +33,10 @@ export default function LoginPage() {
 
   const handleSubmit = async (e) => {
     e?.preventDefault();
-    if (!email || !password) {
+    const cleanEmail = (email || '').trim();
+    const cleanPassword = (password || '').trim();
+
+    if (!cleanEmail || !cleanPassword) {
       setError('Please enter both corporate email and password.');
       return;
     }
@@ -41,10 +44,16 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const res = await api.post('/auth/login', { email, password, rememberMe });
+      const res = await api.post('/auth/login', {
+        email: cleanEmail,
+        password: cleanPassword,
+        rememberMe,
+        tabId: getTabId(),
+      });
       const payload = res?.data || res;
       const user = payload?.user;
       const company = payload?.company;
+      const session = payload?.session || null;
       const accessToken = payload?.tokens?.accessToken || payload?.accessToken;
       const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
 
@@ -52,7 +61,7 @@ export default function LoginPage() {
         throw new Error('Malformed authentication response received from server.');
       }
 
-      dispatch(setCredentials({ user, accessToken, refreshToken, company, rememberMe }));
+      dispatch(setCredentials({ user, accessToken, refreshToken, company, session }));
       toast.success(`Welcome back, ${user.name}!`);
 
       navigate('/dashboard');
@@ -75,10 +84,16 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const res = await api.post('/auth/login', { email: demoEmail, password: demoPassword, rememberMe });
+      const res = await api.post('/auth/login', {
+        email: demoEmail,
+        password: demoPassword,
+        rememberMe,
+        tabId: getTabId(),
+      });
       const payload = res?.data || res;
       const user = payload?.user;
       const company = payload?.company;
+      const session = payload?.session || null;
       const accessToken = payload?.tokens?.accessToken || payload?.accessToken;
       const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
 
@@ -86,7 +101,7 @@ export default function LoginPage() {
         throw new Error('Malformed authentication response received from server.');
       }
 
-      dispatch(setCredentials({ user, accessToken, refreshToken, company, rememberMe }));
+      dispatch(setCredentials({ user, accessToken, refreshToken, company, session }));
       toast.success(`Logged in as ${user.name} (${user.role.replace('_', ' ')})`);
       navigate('/dashboard');
     } catch (err) {

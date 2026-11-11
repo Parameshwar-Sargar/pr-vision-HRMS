@@ -2,6 +2,8 @@ import { Router } from 'express';
 import {
   getEmployees,
   getEmployeeById,
+  getMyProfile,
+  updateMyProfile,
   createEmployee,
   updateEmployee,
   confirmProbation,
@@ -18,10 +20,15 @@ const router = Router();
 
 router.use(authenticate);
 
+// Self-service profile routes (must precede /:id)
+router.get('/me', getMyProfile);
+router.patch('/me', updateMyProfile);
+
 router.get('/', getEmployees);
 router.get('/:id', getEmployeeById);
 router.post('/', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), createEmployee);
 router.put('/:id', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), updateEmployee);
+router.patch('/:id', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), updateEmployee);
 
 // Lifecycle actions
 router.patch('/:id/confirm', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), confirmProbation);

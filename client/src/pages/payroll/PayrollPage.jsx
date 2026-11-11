@@ -83,7 +83,7 @@ export default function PayrollPage() {
         `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/payroll/payslips/${payslipId}/pdf`,
         {
           headers: {
-            Authorization: `Bearer ${localStorage.getItem('pr_access_token')}`,
+            Authorization: `Bearer ${sessionStorage.getItem('pr_access_token')}`,
           },
         }
       );

@@ -32,16 +32,27 @@ export const connectDB = async ({ exitOnError = false } = {}) => {
     return;
   }
 
+  // Reuse existing shared connection if already connected or connecting
+  if (mongoose.connection.readyState === 1) {
+    return mongoose;
+  }
+
   // Mask credentials for secure logging
   const maskedUri = uri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@');
   console.log(`Connecting to MongoDB Atlas at: ${maskedUri}`);
 
+  const poolOptions = {
+    dbName: 'pr_vision_hrms',
+    maxPoolSize: 6,
+    minPoolSize: 1,
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 15000,
+    socketTimeoutMS: 45000,
+    maxIdleTimeMS: 60000,
+  };
+
   try {
-    const conn = await mongoose.connect(uri, {
-      dbName: 'pr_vision_hrms',
-      serverSelectionTimeoutMS: 8000,
-      connectTimeoutMS: 10000,
-    });
+    const conn = await mongoose.connect(uri, poolOptions);
     console.log(`✅ Connected to MongoDB Atlas successfully [Host: ${conn.connection.host}, DB: ${conn.connection.name}]`);
     if (reconnectTimer) {
       clearInterval(reconnectTimer);
@@ -60,7 +71,7 @@ export const connectDB = async ({ exitOnError = false } = {}) => {
         try {
           if (mongoose.connection.readyState !== 1) {
             await mongoose.connect(uri, {
-              dbName: 'pr_vision_hrms',
+              ...poolOptions,
               serverSelectionTimeoutMS: 5000,
               connectTimeoutMS: 8000,
             });

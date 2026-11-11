@@ -1,0 +1,18 @@
+{
+  "name": "PR VISION HRMS | People. Process. Performance.",
+  "short_name": "PR VISION HRMS",
+  "description": "PR VISION HRMS – Enterprise Human Resource Management System by PR VISION INNOVATIONS. People. Process. Performance.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#2563EB",
+  "icons": [
+    {
+      "src": "/favicon.svg?v=prvision2026",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

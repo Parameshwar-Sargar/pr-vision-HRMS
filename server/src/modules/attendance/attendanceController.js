@@ -59,7 +59,11 @@ export const checkIn = async (req, res, next) => {
       await record.save();
     }
 
-    return sendSuccess(res, `Check-in recorded at ${now.toLocaleTimeString()}`, { record });
+    const populatedRecord = await Attendance.findById(record._id)
+      .populate('employeeId', 'firstName lastName employeeId departmentId branchId')
+      .lean();
+
+    return sendSuccess(res, `Check-in recorded at ${now.toLocaleTimeString()}`, { record: populatedRecord });
   } catch (error) {
     next(error);
   }
@@ -106,8 +110,12 @@ export const checkOut = async (req, res, next) => {
 
     await record.save();
 
+    const populatedRecord = await Attendance.findById(record._id)
+      .populate('employeeId', 'firstName lastName employeeId departmentId branchId')
+      .lean();
+
     return sendSuccess(res, `Check-out recorded at ${now.toLocaleTimeString()}. Total worked: ${totalHours} hours.`, {
-      record,
+      record: populatedRecord,
     });
   } catch (error) {
     next(error);
@@ -120,12 +128,42 @@ export const getAttendance = async (req, res, next) => {
 
     const query = {};
 
+    // Strict Role-Based Isolation
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ userId: req.user._id });
-      if (!myEmp) return sendSuccess(res, 'No records', { attendance: [] });
-      query.employeeId = myEmp._id;
-    } else if (employeeId) {
-      query.employeeId = employeeId;
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No employee profile is linked to your user account.', [], 403);
+      }
+      if (employeeId && employeeId.toString() !== req.verifiedEmployeeId.toString()) {
+        return sendError(res, 'Access denied: Employees can only view their own attendance records.', [], 403);
+      }
+      query.employeeId = req.verifiedEmployeeId;
+    } else if (req.user.role === ROLES.MANAGER) {
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No manager employee profile found.', [], 403);
+      }
+      const teamEmployees = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id');
+      const teamIds = teamEmployees.map((e) => e._id);
+      teamIds.push(req.verifiedEmployeeId);
+
+      if (employeeId) {
+        const isAllowed = teamIds.some((id) => id.toString() === employeeId.toString());
+        if (!isAllowed) {
+          return sendError(res, 'Access denied: You can only view attendance records for your direct reporting team.', [], 403);
+        }
+        query.employeeId = employeeId;
+      } else {
+        query.employeeId = { $in: teamIds };
+      }
+    } else if (req.user.role === ROLES.HR_MANAGER || req.user.role === ROLES.ADMIN) {
+      if (employeeId) {
+        query.employeeId = employeeId;
+      }
+    } else {
+      if (req.verifiedEmployeeId) {
+        query.employeeId = req.verifiedEmployeeId;
+      } else {
+        return sendError(res, 'Access denied: Insufficient permissions to view attendance records.', [], 403);
+      }
     }
 
     if (branchId) query.branchId = branchId;
@@ -140,12 +178,15 @@ export const getAttendance = async (req, res, next) => {
     if (status) query.status = status;
 
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    const total = await Attendance.countDocuments(query);
-    const attendance = await Attendance.find(query)
-      .sort({ date: -1 })
-      .skip(skip)
-      .limit(parseInt(limit, 10))
-      .populate('employeeId', 'firstName lastName employeeId departmentId branchId');
+    const [total, attendance] = await Promise.all([
+      Attendance.countDocuments(query),
+      Attendance.find(query)
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(parseInt(limit, 10))
+        .populate('employeeId', 'firstName lastName employeeId departmentId branchId')
+        .lean(),
+    ]);
 
     return sendSuccess(res, 'Attendance records retrieved.', {
       attendance,

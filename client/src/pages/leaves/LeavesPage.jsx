@@ -19,6 +19,7 @@ export default function LeavesPage() {
   const [requests, setRequests] = useState([]);
   const [leaveTypes, setLeaveTypes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Apply Leave Modal
   const [showApplyModal, setShowApplyModal] = useState(false);
@@ -33,20 +34,20 @@ export default function LeavesPage() {
   const isApprover = user?.role === 'ADMIN' || user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER' || user?.role === 'MANAGER';
 
   useEffect(() => {
-    fetchLeaveData();
+    fetchLeaveData(true);
   }, []);
 
-  const fetchLeaveData = async () => {
+  const fetchLeaveData = async (showSkeleton = false) => {
     try {
-      setLoading(true);
+      if (showSkeleton) setLoading(true);
       const [balRes, reqRes, typesRes] = await Promise.all([
         api.get('/leaves/balances'),
         api.get('/leaves/requests'),
         api.get('/leaves/types'),
       ]);
-      setBalances(balRes.data.balances || []);
-      setRequests(reqRes.data.requests || []);
-      setLeaveTypes(typesRes.data.leaveTypes || []);
+      setBalances(balRes.data?.balances || balRes.balances || []);
+      setRequests(reqRes.data?.requests || reqRes.requests || []);
+      setLeaveTypes(typesRes.data?.leaveTypes || typesRes.leaveTypes || []);
     } catch (err) {
       toast.error('Failed to load leave records');
     } finally {
@@ -56,27 +57,49 @@ export default function LeavesPage() {
 
   const handleApplyLeave = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     try {
-      await api.post('/leaves/apply', {
+      setIsSubmitting(true);
+      const res = await api.post('/leaves/apply', {
         ...applyForm,
         totalDays: Number(applyForm.totalDays),
       });
+      const created = res?.data?.request || res?.request;
+      if (created) {
+        setRequests((prev) => [created, ...prev]);
+      }
       toast.success('Leave applied successfully and sent for approval!');
       setShowApplyModal(false);
       setApplyForm({ leaveTypeId: '', startDate: '', endDate: '', totalDays: 1, reason: '' });
-      fetchLeaveData();
+      fetchLeaveData(false);
     } catch (err) {
       toast.error(err.message || 'Leave application failed');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleReview = async (id, status) => {
     try {
+      setRequests((prev) => prev.map((r) => (r._id === id ? { ...r, status } : r)));
       await api.patch(`/leaves/requests/${id}/review`, { status });
       toast.success(`Leave request ${status.toLowerCase()}`);
-      fetchLeaveData();
+      fetchLeaveData(false);
     } catch (err) {
-      toast.error(err.message || 'Review action failed');
+      toast.error(err.response?.data?.message || err.message || 'Review action failed');
+      fetchLeaveData(false);
+    }
+  };
+
+  const handleCancelLeave = async (id) => {
+    try {
+      setRequests((prev) => prev.map((r) => (r._id === id ? { ...r, status: 'Cancelled' } : r)));
+      await api.post(`/leaves/requests/${id}/cancel`);
+      toast.success('Leave request cancelled successfully.');
+      fetchLeaveData(false);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to cancel leave');
+      fetchLeaveData(false);
     }
   };
 
@@ -144,7 +167,7 @@ export default function LeavesPage() {
                   <th className="py-3 px-4">Days</th>
                   <th className="py-3 px-4">Reason</th>
                   <th className="py-3 px-4">Status</th>
-                  {isApprover && <th className="py-3 px-4 text-right">Approval Actions</th>}
+                  <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -172,32 +195,40 @@ export default function LeavesPage() {
                             ? 'bg-emerald-100 text-emerald-800'
                             : req.status === 'Pending'
                             ? 'bg-amber-100 text-amber-800'
+                            : req.status === 'Cancelled'
+                            ? 'bg-slate-100 text-slate-700'
                             : 'bg-red-100 text-red-800'
                         }`}
                       >
                         {req.status}
                       </span>
                     </td>
-                    {isApprover && (
-                      <td className="py-3.5 px-4 text-right space-x-2">
-                        {req.status === 'Pending' && (
-                          <>
-                            <button
-                              onClick={() => handleReview(req._id, 'Approved')}
-                              className="px-2.5 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded font-bold"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              onClick={() => handleReview(req._id, 'Rejected')}
-                              className="px-2.5 py-1 bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 rounded font-bold"
-                            >
-                              Reject
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    )}
+                    <td className="py-3.5 px-4 text-right space-x-2">
+                      {isApprover && req.status === 'Pending' && (
+                        <>
+                          <button
+                            onClick={() => handleReview(req._id, 'Approved')}
+                            className="px-2.5 py-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded font-bold"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => handleReview(req._id, 'Rejected')}
+                            className="px-2.5 py-1 bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 rounded font-bold"
+                          >
+                            Reject
+                          </button>
+                        </>
+                      )}
+                      {!isApprover && req.status === 'Pending' && (
+                        <button
+                          onClick={() => handleCancelLeave(req._id)}
+                          className="px-2.5 py-1 bg-slate-100 text-slate-700 hover:bg-red-50 hover:text-red-700 border border-slate-300 rounded font-bold"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

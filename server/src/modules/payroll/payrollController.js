@@ -293,13 +293,25 @@ export const getPayslips = async (req, res, next) => {
 
     const query = {};
 
-    // Employee isolation: Employees only see their own payslips
-    if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      if (!myEmp) return sendSuccess(res, 'No employee record found.', { payslips: [] });
-      query.employeeId = myEmp._id;
-    } else if (employeeId) {
-      query.employeeId = employeeId;
+    // Strict Data Isolation: Employees and Managers can only view their own payslips
+    if (req.user.role === ROLES.EMPLOYEE || req.user.role === ROLES.MANAGER) {
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No employee profile is linked to your user account.', [], 403);
+      }
+      if (employeeId && employeeId.toString() !== req.verifiedEmployeeId.toString()) {
+        return sendError(res, 'Access denied: You cannot view payslips belonging to another employee.', [], 403);
+      }
+      query.employeeId = req.verifiedEmployeeId;
+    } else if (req.user.role === ROLES.ADMIN || req.user.role === ROLES.HR_MANAGER || req.user.role === ROLES.PAYROLL_ADMIN) {
+      if (employeeId) {
+        query.employeeId = employeeId;
+      }
+    } else {
+      if (req.verifiedEmployeeId) {
+        query.employeeId = req.verifiedEmployeeId;
+      } else {
+        return sendError(res, 'Access denied: Insufficient permissions to view payroll records.', [], 403);
+      }
     }
 
     if (month) query.month = parseInt(month, 10);
@@ -338,9 +350,14 @@ export const downloadPayslipPDF = async (req, res, next) => {
       return sendError(res, 'Payslip not found.', [], 404);
     }
 
-    if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      if (!myEmp || payslip.employeeId.toString() !== myEmp._id.toString()) {
+    // Role verification: Non-payroll admins can only download their own payslip
+    const isPrivileged =
+      req.user.role === ROLES.ADMIN ||
+      req.user.role === ROLES.HR_MANAGER ||
+      req.user.role === ROLES.PAYROLL_ADMIN;
+
+    if (!isPrivileged) {
+      if (!req.verifiedEmployeeId || payslip.employeeId.toString() !== req.verifiedEmployeeId.toString()) {
         return sendError(res, 'Access denied. You cannot access another employee’s payslip.', [], 403);
       }
     }

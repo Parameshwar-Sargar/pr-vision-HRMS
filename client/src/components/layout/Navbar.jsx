@@ -17,6 +17,9 @@ export default function Navbar({ onMenuToggle, title }) {
 
   useEffect(() => {
     fetchNotifications();
+    const onMutated = () => fetchNotifications();
+    window.addEventListener('hrms:data-mutated', onMutated);
+    return () => window.removeEventListener('hrms:data-mutated', onMutated);
   }, []);
 
   const fetchNotifications = async () => {
@@ -132,17 +135,30 @@ export default function Navbar({ onMenuToggle, title }) {
           </button>
 
           {showProfileMenu && (
-            <div className="absolute right-0 mt-2 w-48 bg-white border border-slate-200 rounded-xl shadow-lg z-50 py-1">
+            <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-lg z-50 py-1">
               <div className="px-3 py-2 border-b border-slate-100">
                 <p className="text-xs font-bold text-slate-800 truncate">{user?.name}</p>
                 <p className="text-[11px] text-slate-400 truncate">{user?.email}</p>
+                <span className="inline-block mt-1 px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-blue-50 text-blue-700">
+                  Tab Role: {user?.role}
+                </span>
               </div>
+              <button
+                onClick={() => {
+                  setShowProfileMenu(false);
+                  navigate('/settings?tab=security');
+                }}
+                className="flex items-center w-full gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                <ShieldCheck className="w-4 h-4 text-blue-600" />
+                <span>Security & Active Sessions</span>
+              </button>
               <button
                 onClick={handleLogout}
                 className="flex items-center w-full gap-2 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Sign Out</span>
+                <span>Sign Out (This Tab)</span>
               </button>
             </div>
           )}

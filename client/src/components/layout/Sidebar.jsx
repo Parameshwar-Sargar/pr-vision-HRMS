@@ -24,26 +24,115 @@ import {
 export default function Sidebar({ isOpen, onClose }) {
   const { user } = useSelector((state) => state.auth);
 
+  const role = user?.role || 'EMPLOYEE';
+  const isAdmin = role === 'ADMIN';
+  const isHR = role === 'HR_MANAGER';
+  const isManager = role === 'MANAGER';
+  const isEmployee = role === 'EMPLOYEE';
+  const isRecruiter = role === 'RECRUITER';
+  const isPayroll = role === 'PAYROLL_ADMIN';
+
+  // Build role-isolated navigation items
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-    { name: 'Employees', path: '/employees', icon: Users },
-    { name: 'Departments', path: '/departments', icon: Building2 },
-    { name: 'Attendance', path: '/attendance', icon: CalendarCheck },
-    { name: 'Leaves', path: '/leaves', icon: CalendarRange },
-    { name: 'Shifts', path: '/shifts', icon: Clock },
-    { name: 'Payroll', path: '/payroll', icon: DollarSign },
-    { name: 'Recruitment', path: '/recruitment', icon: Briefcase },
-    { name: 'Performance', path: '/performance', icon: Target },
-    { name: 'Training', path: '/training', icon: GraduationCap },
-    { name: 'Expenses', path: '/expenses', icon: Receipt },
-    { name: 'Assets', path: '/assets', icon: Laptop },
-    { name: 'Grievances', path: '/grievances', icon: LifeBuoy },
-    { name: 'Announcements', path: '/announcements', icon: Megaphone },
-    { name: 'Documents', path: '/documents', icon: FileText },
-    { name: 'Reports', path: '/reports', icon: BarChart3 },
-    ...(user?.role === 'ADMIN' || user?.role === 'HR_MANAGER'
-      ? [{ name: 'Settings & Branches', path: '/settings', icon: Settings }]
+
+    // Employees Directory (Restricted to HR, Admin, Payroll)
+    ...(isAdmin || isHR || isPayroll
+      ? [{ name: 'Employees', path: '/employees', icon: Users }]
       : []),
+
+    // Departments & Designations (Admin & HR only)
+    ...(isAdmin || isHR
+      ? [{ name: 'Departments', path: '/departments', icon: Building2 }]
+      : []),
+
+    // Attendance
+    {
+      name: isEmployee ? 'My Attendance' : isManager ? 'Team Attendance' : 'Attendance',
+      path: '/attendance',
+      icon: CalendarCheck,
+    },
+
+    // Leaves
+    {
+      name: isEmployee ? 'My Leaves' : isManager ? 'Team Leaves' : 'Leaves',
+      path: '/leaves',
+      icon: CalendarRange,
+    },
+
+    // Shifts
+    {
+      name: isEmployee ? 'My Shift' : 'Shifts',
+      path: '/shifts',
+      icon: Clock,
+    },
+
+    // Payroll (Self-service payslips for Employee; Full payroll for Admin, HR, Payroll Admin)
+    ...(isAdmin || isHR || isPayroll || isEmployee
+      ? [{ name: isEmployee ? 'My Payslips' : 'Payroll', path: '/payroll', icon: DollarSign }]
+      : []),
+
+    // Recruitment (Admin, HR, Recruiter)
+    ...(isAdmin || isHR || isRecruiter
+      ? [{ name: 'Recruitment', path: '/recruitment', icon: Briefcase }]
+      : []),
+
+    // Performance
+    {
+      name: isEmployee ? 'My Performance' : isManager ? 'Team Performance' : 'Performance',
+      path: '/performance',
+      icon: Target,
+    },
+
+    // Training
+    {
+      name: isEmployee ? 'My Training' : 'Training',
+      path: '/training',
+      icon: GraduationCap,
+    },
+
+    // Expenses
+    {
+      name: isEmployee ? 'My Expenses' : isManager ? 'Team Expenses' : 'Expenses',
+      path: '/expenses',
+      icon: Receipt,
+    },
+
+    // Assets
+    {
+      name: isEmployee ? 'My Assets' : 'Assets',
+      path: '/assets',
+      icon: Laptop,
+    },
+
+    // Grievances
+    {
+      name: isEmployee ? 'My Grievances' : 'Grievances',
+      path: '/grievances',
+      icon: LifeBuoy,
+    },
+
+    // Announcements (All)
+    { name: 'Announcements', path: '/announcements', icon: Megaphone },
+
+    // Documents
+    {
+      name: isEmployee ? 'My Documents' : 'Documents',
+      path: '/documents',
+      icon: FileText,
+    },
+
+    // Reports (Restricted to Admin, HR, Manager, Payroll Admin)
+    ...(!isEmployee && !isRecruiter
+      ? [{ name: isManager ? 'Team Reports' : 'Reports', path: '/reports', icon: BarChart3 }]
+      : []),
+
+    // Settings, Branches & Security Sessions (Accessible to all roles; Admin/HR get full company settings)
+    {
+      name: isAdmin || isHR ? 'Settings & Security' : 'Security & Sessions',
+      path: isAdmin || isHR ? '/settings' : '/security',
+      icon: Settings,
+    },
   ];
 
   return (

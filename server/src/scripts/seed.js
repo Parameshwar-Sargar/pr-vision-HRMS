@@ -502,6 +502,14 @@ export const seedDatabase = async ({ disconnect = true, forcePurge = false } = {
       },
     });
 
+    // Link User accounts to Employee IDs
+    await User.findByIdAndUpdate(adminUser._id, { employeeId: adminEmp._id });
+    await User.findByIdAndUpdate(hrUser._id, { employeeId: hrEmp._id });
+    await User.findByIdAndUpdate(managerUser._id, { employeeId: managerEmp._id });
+    await User.findByIdAndUpdate(empUser._id, { employeeId: devEmp._id });
+    await User.findByIdAndUpdate(recruiterUser._id, { employeeId: recruiterEmp._id });
+    await User.findByIdAndUpdate(payrollUser._id, { employeeId: payrollEmp._id });
+
     // Update department heads
     engDept.headId = adminEmp._id;
     await engDept.save();

@@ -7,6 +7,7 @@ import SalaryStructure from '../../models/SalaryStructure.js';
 import { ROLES, LIFECYCLE_STAGES } from '../../config/constants.js';
 import { sendSuccess, sendError } from '../../utils/responseUtils.js';
 import { logAudit } from '../../middleware/auditMiddleware.js';
+import { invalidateAuthCache } from '../../middleware/authMiddleware.js';
 
 const employeeCreateSchema = z.object({
   firstName: z.string().min(1, 'First name is required'),
@@ -57,7 +58,25 @@ export const getEmployees = async (req, res, next) => {
   try {
     const { page = 1, limit = 10, search = '', departmentId, branchId, status } = req.query;
 
+    // RBAC: Employees cannot view organization-wide employee directory
+    if (req.user.role === ROLES.EMPLOYEE) {
+      return sendError(
+        res,
+        'Access denied: Employees cannot view the organization-wide employee directory.',
+        [],
+        403
+      );
+    }
+
     const query = { isDeleted: false };
+
+    // Managers can only view their direct reporting team
+    if (req.user.role === ROLES.MANAGER) {
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No manager employee profile found.', [], 403);
+      }
+      query.managerId = req.verifiedEmployeeId;
+    }
 
     if (search) {
       query.$or = [
@@ -73,17 +92,20 @@ export const getEmployees = async (req, res, next) => {
     if (status) query.employmentStatus = status;
 
     const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    const total = await Employee.countDocuments(query);
-    const employees = await Employee.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit, 10))
-      .populate('departmentId', 'name code')
-      .populate('designationId', 'title code')
-      .populate('branchId', 'name code city')
-      .populate('managerId', 'firstName lastName employeeId')
-      .populate('shiftId', 'name startTime endTime')
-      .populate('userId', 'role isActive lastLoginAt');
+    const [total, employees] = await Promise.all([
+      Employee.countDocuments(query),
+      Employee.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit, 10))
+        .populate('departmentId', 'name code')
+        .populate('designationId', 'title code')
+        .populate('branchId', 'name code city')
+        .populate('managerId', 'firstName lastName employeeId')
+        .populate('shiftId', 'name startTime endTime')
+        .populate('userId', 'role isActive lastLoginAt')
+        .lean(),
+    ]);
 
     return sendSuccess(res, 'Employees retrieved successfully.', {
       employees,
@@ -102,6 +124,14 @@ export const getEmployees = async (req, res, next) => {
 export const getEmployeeById = async (req, res, next) => {
   try {
     const { id } = req.params;
+
+    // RBAC: An employee can ONLY view their own employee profile
+    if (req.user.role === ROLES.EMPLOYEE) {
+      if (!req.verifiedEmployeeId || id.toString() !== req.verifiedEmployeeId.toString()) {
+        return sendError(res, 'Access denied: You cannot view another employee profile.', [], 403);
+      }
+    }
+
     const employee = await Employee.findOne({ _id: id, isDeleted: false })
       .populate('departmentId')
       .populate('designationId')
@@ -114,16 +144,38 @@ export const getEmployeeById = async (req, res, next) => {
       return sendError(res, 'Employee not found.', [], 404);
     }
 
-    const currentYear = new Date().getFullYear();
-    const leaveBalances = await LeaveBalance.findOne({
-      employeeId: employee._id,
-      year: currentYear,
-    }).populate('balances.leaveTypeId');
+    // Managers can only view self or direct reports
+    if (req.user.role === ROLES.MANAGER) {
+      const isSelf = req.verifiedEmployeeId && employee._id.toString() === req.verifiedEmployeeId.toString();
+      const isDirectReport = req.verifiedEmployeeId && employee.managerId?._id?.toString() === req.verifiedEmployeeId.toString();
+      if (!isSelf && !isDirectReport) {
+        return sendError(res, 'Access denied: You can only view profiles for your direct reporting team.', [], 403);
+      }
+    }
 
-    const salary = await SalaryStructure.findOne({
-      employeeId: employee._id,
-      isActive: true,
-    });
+    const currentYear = new Date().getFullYear();
+
+    // Salary Structure: Only visible to HR_MANAGER, ADMIN, PAYROLL_ADMIN, or employee themselves
+    const canViewSalary =
+      req.user.role === ROLES.ADMIN ||
+      req.user.role === ROLES.HR_MANAGER ||
+      req.user.role === ROLES.PAYROLL_ADMIN ||
+      (req.verifiedEmployeeId && employee._id.toString() === req.verifiedEmployeeId.toString());
+
+    const [leaveBalances, salary] = await Promise.all([
+      LeaveBalance.findOne({
+        employeeId: employee._id,
+        year: currentYear,
+      })
+        .populate('balances.leaveTypeId')
+        .lean(),
+      canViewSalary
+        ? SalaryStructure.findOne({
+            employeeId: employee._id,
+            isActive: true,
+          }).lean()
+        : Promise.resolve(null),
+    ]);
 
     return sendSuccess(res, 'Employee profile retrieved.', {
       employee,
@@ -135,17 +187,107 @@ export const getEmployeeById = async (req, res, next) => {
   }
 };
 
+/**
+ * Get Authenticated Employee Profile (Self-Service)
+ */
+export const getMyProfile = async (req, res, next) => {
+  try {
+    if (!req.verifiedEmployeeId) {
+      return sendError(res, 'No active employee profile linked to your user account.', [], 404);
+    }
+
+    const currentYear = new Date().getFullYear();
+
+    const [employee, leaveBalances, salary] = await Promise.all([
+      Employee.findOne({ _id: req.verifiedEmployeeId, isDeleted: false })
+        .populate('departmentId')
+        .populate('designationId')
+        .populate('branchId')
+        .populate('managerId', 'firstName lastName employeeId email')
+        .populate('shiftId')
+        .populate('userId', 'role isActive lastLoginAt')
+        .lean(),
+      LeaveBalance.findOne({
+        employeeId: req.verifiedEmployeeId,
+        year: currentYear,
+      })
+        .populate('balances.leaveTypeId')
+        .lean(),
+      SalaryStructure.findOne({
+        employeeId: req.verifiedEmployeeId,
+        isActive: true,
+      }).lean(),
+    ]);
+
+    if (!employee) {
+      return sendError(res, 'Employee record not found.', [], 404);
+    }
+
+    return sendSuccess(res, 'Self profile retrieved.', {
+      employee,
+      leaveBalances,
+      salary,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update Authenticated Employee Profile (Self-Service Contact Updates)
+ */
+export const updateMyProfile = async (req, res, next) => {
+  try {
+    if (!req.verifiedEmployeeId) {
+      return sendError(res, 'No active employee profile linked to your user account.', [], 404);
+    }
+
+    const employee = await Employee.findOne({ _id: req.verifiedEmployeeId, isDeleted: false });
+    if (!employee) {
+      return sendError(res, 'Employee record not found.', [], 404);
+    }
+
+    // Only allow self-service contact field updates
+    const { phone, address, emergencyContact } = req.body;
+    if (phone !== undefined) employee.phone = phone;
+    if (address !== undefined) employee.address = address;
+    if (emergencyContact !== undefined) employee.emergencyContact = emergencyContact;
+
+    await employee.save();
+
+    await logAudit({
+      req,
+      action: 'EMPLOYEE_SELF_UPDATE',
+      entity: 'Employee',
+      entityId: employee._id,
+      details: { phone, address, emergencyContact },
+    });
+
+    return sendSuccess(res, 'Profile updated successfully.', { employee });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const createEmployee = async (req, res, next) => {
   try {
     const validated = employeeCreateSchema.parse(req.body);
+    const normalizedEmail = validated.email.toLowerCase();
 
-    const duplicateEmail = await Employee.findOne({ email: validated.email.toLowerCase(), isDeleted: false });
+    const [duplicateEmail, lastEmployee, existingUser, leaveTypes] = await Promise.all([
+      Employee.findOne({ email: normalizedEmail, isDeleted: false }).select('_id').lean(),
+      Employee.findOne().sort({ createdAt: -1 }).select('employeeId').lean(),
+      validated.createUserAccount
+        ? User.findOne({ email: normalizedEmail }).select('_id').lean()
+        : Promise.resolve(null),
+      LeaveType.find({ isActive: true }).lean(),
+    ]);
+
     if (duplicateEmail) {
       return sendError(res, 'An employee with this email address already exists.', [], 409);
     }
 
     // Auto-generate sequential Employee ID (EMP-001)
-    const lastEmployee = await Employee.findOne().sort({ createdAt: -1 });
     let nextNum = 1;
     if (lastEmployee && lastEmployee.employeeId) {
       const match = lastEmployee.employeeId.match(/\d+$/);
@@ -163,7 +305,7 @@ export const createEmployee = async (req, res, next) => {
       employeeId: generatedEmpId,
       firstName: validated.firstName,
       lastName: validated.lastName,
-      email: validated.email.toLowerCase(),
+      email: normalizedEmail,
       phone: validated.phone,
       branchId: validated.branchId || null,
       departmentId: validated.departmentId,
@@ -182,43 +324,57 @@ export const createEmployee = async (req, res, next) => {
       bankDetails: validated.bankDetails,
     });
 
-    // Create User login account if checked
+    // Create User login account and Leave Balances in parallel
     let createdUser = null;
-    if (validated.createUserAccount) {
-      const existingUser = await User.findOne({ email: validated.email.toLowerCase() });
-      if (!existingUser) {
-        createdUser = await User.create({
-          email: validated.email.toLowerCase(),
+    const postCreateTasks = [];
+
+    if (validated.createUserAccount && !existingUser) {
+      postCreateTasks.push(
+        User.create({
+          email: normalizedEmail,
           password: validated.password,
           name: `${validated.firstName} ${validated.lastName}`.trim(),
           role: validated.role,
           employeeId: employee._id,
           branchId: employee.branchId,
           isActive: true,
-        });
-        employee.userId = createdUser._id;
-        await employee.save();
-      }
+        }).then(async (u) => {
+          createdUser = u;
+          employee.userId = u._id;
+          await employee.save();
+        })
+      );
     }
 
-    // Initialize Leave Balances
-    const leaveTypes = await LeaveType.find({ isActive: true });
     if (leaveTypes.length > 0) {
       const currentYear = new Date().getFullYear();
-      await LeaveBalance.create({
-        employeeId: employee._id,
-        year: currentYear,
-        balances: leaveTypes.map((lt) => ({
-          leaveTypeId: lt._id,
-          allocated: lt.defaultDaysPerYear,
-          used: 0,
-          pending: 0,
-          remaining: lt.defaultDaysPerYear,
-        })),
-      });
+      postCreateTasks.push(
+        LeaveBalance.create({
+          employeeId: employee._id,
+          year: currentYear,
+          balances: leaveTypes.map((lt) => ({
+            leaveTypeId: lt._id,
+            allocated: lt.defaultDaysPerYear,
+            used: 0,
+            pending: 0,
+            remaining: lt.defaultDaysPerYear,
+          })),
+        })
+      );
     }
 
-    await logAudit({
+    await Promise.all(postCreateTasks);
+
+    const populatedEmployee = await Employee.findById(employee._id)
+      .populate('departmentId', 'name code')
+      .populate('designationId', 'title code')
+      .populate('branchId', 'name code city')
+      .populate('managerId', 'firstName lastName employeeId')
+      .populate('shiftId', 'name startTime endTime')
+      .populate('userId', 'role isActive lastLoginAt')
+      .lean();
+
+    logAudit({
       req,
       action: 'EMPLOYEE_CREATED',
       entity: 'Employee',
@@ -226,7 +382,7 @@ export const createEmployee = async (req, res, next) => {
       details: { employeeId: employee.employeeId, email: employee.email },
     });
 
-    return sendSuccess(res, 'Employee added successfully.', { employee, user: createdUser }, 201);
+    return sendSuccess(res, 'Employee added successfully.', { employee: populatedEmployee, user: createdUser }, 201);
   } catch (error) {
     next(error);
   }
@@ -255,6 +411,7 @@ export const updateEmployee = async (req, res, next) => {
       'managerId',
       'shiftId',
       'employmentType',
+      'employmentStatus',
       'address',
       'bankDetails',
       'emergencyContact',
@@ -262,15 +419,39 @@ export const updateEmployee = async (req, res, next) => {
       'previousEmployment',
     ];
 
+    const nullableObjectIdFields = ['branchId', 'managerId', 'shiftId'];
+    const requiredObjectIdFields = ['departmentId', 'designationId'];
+
     for (const field of updatableFields) {
       if (req.body[field] !== undefined) {
-        employee[field] = req.body[field];
+        if (nullableObjectIdFields.includes(field)) {
+          employee[field] = req.body[field] === '' ? null : req.body[field];
+        } else if (requiredObjectIdFields.includes(field)) {
+          if (req.body[field] !== '' && req.body[field] !== null) {
+            employee[field] = req.body[field];
+          }
+        } else {
+          employee[field] = req.body[field];
+        }
       }
     }
 
     await employee.save();
 
-    await logAudit({
+    if (employee.userId) {
+      invalidateAuthCache(employee.userId);
+    }
+
+    const populatedEmployee = await Employee.findById(employee._id)
+      .populate('departmentId', 'name code')
+      .populate('designationId', 'title code')
+      .populate('branchId', 'name code city')
+      .populate('managerId', 'firstName lastName employeeId')
+      .populate('shiftId', 'name startTime endTime')
+      .populate('userId', 'role isActive lastLoginAt')
+      .lean();
+
+    logAudit({
       req,
       action: 'EMPLOYEE_UPDATED',
       entity: 'Employee',
@@ -278,7 +459,7 @@ export const updateEmployee = async (req, res, next) => {
       details: { employeeId: employee.employeeId },
     });
 
-    return sendSuccess(res, 'Employee updated successfully.', { employee });
+    return sendSuccess(res, 'Employee updated successfully.', { employee: populatedEmployee });
   } catch (error) {
     next(error);
   }

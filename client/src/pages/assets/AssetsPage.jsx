@@ -32,15 +32,15 @@ export default function AssetsPage() {
 
   const canManage = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
 
-  const fetchAssetsData = async () => {
-    setIsLoading(true);
+  const fetchAssetsData = async (showSpinner = false) => {
+    if (showSpinner) setIsLoading(true);
     try {
       const [astRes, empRes] = await Promise.all([
         api.get('/assets'),
-        api.get('/employees?limit=100'),
+        canManage ? api.get('/employees?limit=100').catch(() => ({ data: { employees: [] } })) : Promise.resolve({ data: { employees: [] } }),
       ]);
-      setAssets(astRes.data.data.assets || []);
-      setEmployees(empRes.data.data.employees || []);
+      setAssets(astRes.data?.assets || astRes.assets || []);
+      setEmployees(empRes.data?.employees || empRes.employees || []);
     } catch (err) {
       toast.error('Failed to load assets.');
     } finally {
@@ -49,18 +49,22 @@ export default function AssetsPage() {
   };
 
   useEffect(() => {
-    fetchAssetsData();
+    fetchAssetsData(true);
   }, []);
 
   const handleCreateAsset = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/assets', newAsset);
+      const res = await api.post('/assets', newAsset);
+      const created = res?.data?.asset || res?.asset;
+      if (created) {
+        setAssets((prev) => [created, ...prev]);
+      }
       toast.success('Asset added to inventory!');
       setShowAddModal(false);
-      fetchAssetsData();
+      fetchAssetsData(false);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to register asset.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to register asset.');
     }
   };
 
@@ -73,20 +77,24 @@ export default function AssetsPage() {
       });
       toast.success('Asset assigned successfully!');
       setAssignModalAsset(null);
-      fetchAssetsData();
+      fetchAssetsData(false);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to assign asset.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to assign asset.');
     }
   };
 
   const handleReturnAsset = async (assetId) => {
     if (!window.confirm('Confirm returning this asset to inventory?')) return;
     try {
+      setAssets((prev) =>
+        prev.map((a) => (a._id === assetId ? { ...a, status: 'Available', currentAssignedTo: null } : a))
+      );
       await api.post(`/assets/${assetId}/return`, { conditionAtReturn: 'Good' });
       toast.success('Asset returned and available!');
-      fetchAssetsData();
+      fetchAssetsData(false);
     } catch (err) {
       toast.error('Failed to return asset.');
+      fetchAssetsData(false);
     }
   };
 

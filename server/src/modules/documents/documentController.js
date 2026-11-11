@@ -11,11 +11,19 @@ export const getDocuments = async (req, res, next) => {
     const query = {};
 
     if (req.user.role === ROLES.EMPLOYEE) {
-      const myEmp = await Employee.findOne({ userId: req.user._id, isDeleted: false });
-      query.$or = [
-        { employeeId: myEmp ? myEmp._id : null },
-        { employeeId: null },
-      ];
+      if (!req.verifiedEmployeeId) {
+        query.employeeId = null; // shared only
+      } else {
+        query.$or = [{ employeeId: req.verifiedEmployeeId }, { employeeId: null }];
+      }
+    } else if (req.user.role === ROLES.MANAGER) {
+      if (!req.verifiedEmployeeId) {
+        query.employeeId = null;
+      } else {
+        const teamEmployees = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id');
+        const allowedIds = [...teamEmployees.map((t) => t._id), req.verifiedEmployeeId];
+        query.$or = [{ employeeId: { $in: allowedIds } }, { employeeId: null }];
+      }
     } else if (employeeId) {
       query.employeeId = employeeId;
     }
@@ -64,6 +72,21 @@ export const downloadDocument = async (req, res, next) => {
     const doc = await Document.findById(id);
     if (!doc) {
       return sendError(res, 'Document not found.', [], 404);
+    }
+
+    // Role verification for private employee documents
+    if (doc.employeeId) {
+      if (req.user.role === ROLES.EMPLOYEE) {
+        if (!req.verifiedEmployeeId || doc.employeeId.toString() !== req.verifiedEmployeeId.toString()) {
+          return sendError(res, "Access denied: You cannot download another employee's private document.", [], 403);
+        }
+      } else if (req.user.role === ROLES.MANAGER) {
+        const isOwn = req.verifiedEmployeeId && doc.employeeId.toString() === req.verifiedEmployeeId.toString();
+        const targetEmp = await Employee.findOne({ _id: doc.employeeId, managerId: req.verifiedEmployeeId, isDeleted: false });
+        if (!isOwn && !targetEmp) {
+          return sendError(res, "Access denied: This document belongs to an employee outside your direct reporting line.", [], 403);
+        }
+      }
     }
 
     const filePath = path.join(process.cwd(), 'uploads', doc.fileName);

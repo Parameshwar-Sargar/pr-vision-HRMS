@@ -2,19 +2,23 @@ import { sendError } from '../utils/responseUtils.js';
 import { ROLES } from '../config/constants.js';
 
 export const requireRoles = (...roles) => {
+  const normalizedAllowedRoles = roles.map((r) => String(r || '').toUpperCase().trim());
+
   return (req, res, next) => {
     if (!req.user) {
       return sendError(res, 'Authentication required.', [], 401);
     }
 
-    if (req.user.role === ROLES.ADMIN) {
+    const userRole = String(req.user.role || '').toUpperCase().trim();
+
+    if (userRole === ROLES.ADMIN) {
       return next();
     }
 
-    if (!roles.includes(req.user.role)) {
+    if (!normalizedAllowedRoles.includes(userRole)) {
       return sendError(
         res,
-        `Access denied. Requires one of roles: [${roles.join(', ')}]. Your role is ${req.user.role}.`,
+        `Access denied. Requires one of roles: [${normalizedAllowedRoles.join(', ')}]. Your role is ${userRole}.`,
         [],
         403
       );
@@ -30,7 +34,8 @@ export const requirePermissions = (...permissions) => {
       return sendError(res, 'Authentication required.', [], 401);
     }
 
-    if (req.user.role === ROLES.ADMIN) {
+    const userRole = String(req.user.role || '').toUpperCase().trim();
+    if (userRole === ROLES.ADMIN) {
       return next();
     }
 

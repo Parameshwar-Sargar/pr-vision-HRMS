@@ -18,6 +18,7 @@ import {
   Mail,
   Phone,
   ShieldCheck,
+  Edit2,
 } from 'lucide-react';
 
 export default function EmployeesPage() {
@@ -35,6 +36,7 @@ export default function EmployeesPage() {
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState(null);
   const [showQuickDeptModal, setShowQuickDeptModal] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
 
@@ -61,14 +63,17 @@ export default function EmployeesPage() {
   });
 
   useEffect(() => {
-    fetchEmployees();
     fetchMetadata();
+  }, []);
+
+  useEffect(() => {
+    fetchEmployees(employees.length === 0);
   }, [selectedDept, selectedStatus]);
 
-  const fetchEmployees = async () => {
+  const fetchEmployees = async (showSkeleton = false) => {
     try {
-      setLoading(true);
-      const params = {};
+      if (showSkeleton) setLoading(true);
+      const params = { limit: 100 };
       if (selectedDept) params.departmentId = selectedDept;
       if (selectedStatus) params.status = selectedStatus;
       const res = await api.get('/employees', { params });
@@ -158,7 +163,11 @@ export default function EmployeesPage() {
         shiftId: formData.shiftId || null,
       };
 
-      await api.post('/employees', payload);
+      const res = await api.post('/employees', payload);
+      const createdEmp = res?.data?.employee || res?.employee;
+      if (createdEmp) {
+        setEmployees((prev) => [createdEmp, ...prev]);
+      }
       toast.success('Employee created successfully with generated ID!', { id: 'emp-create-success' });
       setShowAddModal(false);
       setFormData({
@@ -177,9 +186,54 @@ export default function EmployeesPage() {
         password: 'Welcome@123',
         role: 'EMPLOYEE',
       });
-      fetchEmployees();
+      fetchEmployees(false);
     } catch (err) {
       toast.error(err.message || 'Failed to create employee', { id: 'emp-create-err' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const openEditModal = (emp) => {
+    setEditingEmployee({
+      _id: emp._id,
+      firstName: emp.firstName || '',
+      lastName: emp.lastName || '',
+      phone: emp.phone || '',
+      departmentId: emp.departmentId?._id || emp.departmentId || '',
+      designationId: emp.designationId?._id || emp.designationId || '',
+      branchId: emp.branchId?._id || emp.branchId || '',
+      shiftId: emp.shiftId?._id || emp.shiftId || '',
+      employmentType: emp.employmentType || 'Full-Time',
+      employmentStatus: emp.employmentStatus || 'Confirmed',
+    });
+  };
+
+  const handleUpdateEmployee = async (e) => {
+    e?.preventDefault();
+    if (!editingEmployee || isSaving) return;
+    try {
+      setIsSaving(true);
+      const res = await api.put(`/employees/${editingEmployee._id}`, {
+        firstName: editingEmployee.firstName.trim(),
+        lastName: editingEmployee.lastName.trim(),
+        phone: editingEmployee.phone.trim(),
+        departmentId: editingEmployee.departmentId,
+        designationId: editingEmployee.designationId,
+        branchId: editingEmployee.branchId || null,
+        shiftId: editingEmployee.shiftId || null,
+        employmentType: editingEmployee.employmentType,
+        employmentStatus: editingEmployee.employmentStatus,
+      });
+      const updatedEmp = res?.data?.employee || res?.employee;
+      if (updatedEmp) {
+        setEmployees((prev) => prev.map((item) => (item._id === updatedEmp._id ? updatedEmp : item)));
+      }
+      toast.success('Employee record updated!', { id: 'emp-update-success' });
+      setEditingEmployee(null);
+      fetchEmployees(false);
+    } catch (err) {
+      toast.error(err.message || 'Failed to update employee', { id: 'emp-update-err' });
     } finally {
       setIsSaving(false);
     }
@@ -220,11 +274,13 @@ export default function EmployeesPage() {
   const handleDeactivate = async (id, name) => {
     if (!window.confirm(`Are you sure you want to deactivate employee: ${name}?`)) return;
     try {
+      setEmployees((prev) => prev.filter((e) => e._id !== id));
       await api.delete(`/employees/${id}`);
       toast.success(`${name} has been deactivated`, { id: 'emp-deact-toast' });
-      fetchEmployees();
+      fetchEmployees(false);
     } catch (err) {
       toast.error(err.message || 'Deactivation failed', { id: 'emp-deact-err' });
+      fetchEmployees(false);
     }
   };
 
@@ -314,8 +370,21 @@ export default function EmployeesPage() {
       {/* Employees Table */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
         {loading ? (
-          <div className="flex items-center justify-center p-12">
-            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+          <div className="p-6 space-y-4 animate-pulse">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-slate-200" />
+                  <div className="space-y-1.5">
+                    <div className="h-3 w-32 bg-slate-200 rounded" />
+                    <div className="h-2.5 w-16 bg-slate-100 rounded" />
+                  </div>
+                </div>
+                <div className="h-3 w-28 bg-slate-200 rounded" />
+                <div className="h-3 w-36 bg-slate-200 rounded" />
+                <div className="h-5 w-16 bg-slate-100 rounded-full" />
+              </div>
+            ))}
           </div>
         ) : filteredEmployees.length === 0 ? (
           <div className="p-12 text-center space-y-3">
@@ -372,7 +441,7 @@ export default function EmployeesPage() {
                     </td>
                     <td className="px-6 py-3.5">
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                        {emp.lifecycleStage || 'Confirmed'}
+                        {emp.employmentStatus || emp.lifecycleStage || 'Confirmed'}
                       </span>
                     </td>
                     <td className="px-6 py-3.5">
@@ -393,6 +462,13 @@ export default function EmployeesPage() {
                           title="View Details"
                         >
                           <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => openEditModal(emp)}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                          title="Edit Employee"
+                        >
+                          <Edit2 className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDeactivate(emp._id, `${emp.firstName} ${emp.lastName}`)}
@@ -829,7 +905,7 @@ export default function EmployeesPage() {
               </div>
               <div className="p-3 rounded-xl bg-slate-50">
                 <span className="text-[10px] font-bold text-slate-400 uppercase">Status</span>
-                <p className="font-semibold text-emerald-600">{selectedEmployee.lifecycleStage || 'Confirmed'}</p>
+                <p className="font-semibold text-emerald-600">{selectedEmployee.employmentStatus || selectedEmployee.lifecycleStage || 'Confirmed'}</p>
               </div>
             </div>
 
@@ -841,6 +917,124 @@ export default function EmployeesPage() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Employee Modal */}
+      {editingEmployee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-base font-bold text-slate-900">Edit Employee Profile</h3>
+              <button
+                disabled={isSaving}
+                onClick={() => setEditingEmployee(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateEmployee} className="space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">First Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingEmployee.firstName}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, firstName: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Last Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingEmployee.lastName}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, lastName: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Phone</label>
+                  <input
+                    type="text"
+                    value={editingEmployee.phone}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, phone: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Lifecycle Status</label>
+                  <select
+                    value={editingEmployee.employmentStatus}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, employmentStatus: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
+                    <option value="Probation">Probation</option>
+                    <option value="Confirmed">Confirmed</option>
+                    <option value="Promoted">Promoted</option>
+                    <option value="Resigned">Resigned</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Department</label>
+                  <select
+                    value={editingEmployee.departmentId}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, departmentId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
+                    {departments.map((d) => (
+                      <option key={d._id} value={d._id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Designation</label>
+                  <select
+                    value={editingEmployee.designationId}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, designationId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
+                    {designations.map((des) => (
+                      <option key={des._id} value={des._id}>
+                        {des.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => setEditingEmployee(null)}
+                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow-sm disabled:opacity-50"
+                >
+                  {isSaving && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSaving ? 'Updating...' : 'Save Changes'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

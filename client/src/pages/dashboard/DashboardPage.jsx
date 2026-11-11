@@ -25,6 +25,7 @@ import {
   UserPlus,
   ShieldCheck,
   Layers,
+  RefreshCw,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -41,6 +42,7 @@ export default function DashboardPage() {
   const { user } = useSelector((state) => state.auth);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [clockLoading, setClockLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -51,18 +53,27 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    fetchDashboardStats();
+    fetchDashboardStats(true);
+    const onMutated = () => fetchDashboardStats(false);
+    window.addEventListener('hrms:data-mutated', onMutated);
+    return () => window.removeEventListener('hrms:data-mutated', onMutated);
   }, []);
 
-  const fetchDashboardStats = async () => {
+  const fetchDashboardStats = async (initial = false) => {
     try {
-      setLoading(true);
+      if (initial && !data) {
+        setLoading(true);
+      } else {
+        setIsRefreshing(true);
+      }
       const res = await api.get('/dashboard/stats');
-      setData(res.data.data);
+      const payload = res?.data || res;
+      setData(payload);
     } catch (err) {
-      toast.error('Failed to load dashboard statistics');
+      if (initial) toast.error('Failed to load dashboard statistics');
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -70,8 +81,21 @@ export default function DashboardPage() {
     try {
       setClockLoading(true);
       const res = await api.post('/attendance/check-in');
-      toast.success(res.data.message || 'Clocked in successfully!');
-      fetchDashboardStats();
+      const record = res?.data?.record || res?.record;
+      if (record && data?.kpi) {
+        setData((prev) => ({
+          ...prev,
+          kpi: {
+            ...prev.kpi,
+            checkedIn: true,
+            checkInTime: record.checkInTime || new Date().toISOString(),
+            statusToday: record.status || 'Present',
+            presentToday: (prev.kpi.presentToday || 0) + 1,
+          },
+        }));
+      }
+      toast.success(res?.message || res?.data?.message || 'Clocked in successfully!');
+      fetchDashboardStats(false);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message);
     } finally {
@@ -83,8 +107,19 @@ export default function DashboardPage() {
     try {
       setClockLoading(true);
       const res = await api.post('/attendance/check-out');
-      toast.success(res.data.message || 'Clocked out successfully!');
-      fetchDashboardStats();
+      const record = res?.data?.record || res?.record;
+      if (record && data?.kpi) {
+        setData((prev) => ({
+          ...prev,
+          kpi: {
+            ...prev.kpi,
+            checkedOut: true,
+            checkOutTime: record.checkOutTime || new Date().toISOString(),
+          },
+        }));
+      }
+      toast.success(res?.message || res?.data?.message || 'Clocked out successfully!');
+      fetchDashboardStats(false);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message);
     } finally {
@@ -92,10 +127,23 @@ export default function DashboardPage() {
     }
   };
 
-  if (loading) {
+  if (loading && !data) {
     return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+      <div className="space-y-6 animate-pulse">
+        <div className="h-28 rounded-2xl bg-slate-200" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-28 rounded-2xl bg-white border border-slate-200 p-5 space-y-3">
+              <div className="h-3 w-24 bg-slate-200 rounded" />
+              <div className="h-7 w-14 bg-slate-200 rounded" />
+              <div className="h-2.5 w-32 bg-slate-100 rounded" />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 h-80 rounded-2xl bg-white border border-slate-200 p-6" />
+          <div className="h-80 rounded-2xl bg-white border border-slate-200 p-6" />
+        </div>
       </div>
     );
   }
@@ -131,6 +179,16 @@ export default function DashboardPage() {
 
           {/* Realtime Clock & Quick Actions */}
           <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => fetchDashboardStats(false)}
+              disabled={isRefreshing}
+              className="p-2.5 rounded-xl bg-black/20 hover:bg-black/30 text-white transition-all backdrop-blur-md border border-white/10 flex items-center gap-1.5 text-xs font-semibold"
+              title="Refresh Dashboard Statistics"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{isRefreshing ? 'Syncing...' : 'Refresh'}</span>
+            </button>
+
             <div className="px-3.5 py-2 rounded-xl bg-black/20 backdrop-blur-md border border-white/10 text-right">
               <div className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider">
                 {currentTime.toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })}

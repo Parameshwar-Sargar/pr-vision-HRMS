@@ -17,23 +17,23 @@ export const getDepartments = async (req, res, next) => {
     const filter = { isDeleted: false };
     if (branchId) filter.branchId = branchId;
 
-    const departments = await Department.find(filter)
-      .populate('headId', 'firstName lastName employeeId email')
-      .populate('branchId', 'name code')
-      .sort({ name: 1 });
+    const [departments, counts] = await Promise.all([
+      Department.find(filter)
+        .populate('headId', 'firstName lastName employeeId email')
+        .populate('branchId', 'name code')
+        .sort({ name: 1 })
+        .lean(),
+      Employee.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: '$departmentId', count: { $sum: 1 } } },
+      ]),
+    ]);
 
-    // Attach real-time employee count
-    const deptsWithCount = await Promise.all(
-      departments.map(async (dept) => {
-        const count = await Employee.countDocuments({
-          departmentId: dept._id,
-          isDeleted: false,
-        });
-        const obj = dept.toObject();
-        obj.employeeCount = count;
-        return obj;
-      })
-    );
+    const countMap = new Map(counts.map((c) => [c._id?.toString(), c.count]));
+    const deptsWithCount = departments.map((dept) => ({
+      ...dept,
+      employeeCount: countMap.get(dept._id.toString()) || 0,
+    }));
 
     return sendSuccess(res, 'Departments retrieved.', { departments: deptsWithCount });
   } catch (error) {
@@ -48,12 +48,12 @@ export const createDepartment = async (req, res, next) => {
     const exists = await Department.findOne({
       name: { $regex: new RegExp(`^${validated.name}$`, 'i') },
       isDeleted: false,
-    });
+    }).lean();
     if (exists) {
       return sendError(res, 'Department with this name already exists in your company.', [], 409);
     }
 
-    const department = await Department.create({
+    const created = await Department.create({
       name: validated.name,
       code: validated.code || validated.name.substring(0, 3).toUpperCase(),
       description: validated.description,
@@ -61,6 +61,13 @@ export const createDepartment = async (req, res, next) => {
       branchId: validated.branchId || null,
       createdBy: req.user?._id || null,
     });
+
+    const populated = await Department.findById(created._id)
+      .populate('headId', 'firstName lastName employeeId email')
+      .populate('branchId', 'name code')
+      .lean();
+
+    const department = { ...populated, employeeCount: 0 };
 
     return sendSuccess(res, 'Department created successfully.', { department }, 201);
   } catch (error) {
@@ -87,7 +94,18 @@ export const updateDepartment = async (req, res, next) => {
     }
 
     await department.save();
-    return sendSuccess(res, 'Department updated successfully.', { department });
+
+    const [populated, employeeCount] = await Promise.all([
+      Department.findById(department._id)
+        .populate('headId', 'firstName lastName employeeId email')
+        .populate('branchId', 'name code')
+        .lean(),
+      Employee.countDocuments({ departmentId: department._id, isDeleted: false }),
+    ]);
+
+    return sendSuccess(res, 'Department updated successfully.', {
+      department: { ...populated, employeeCount },
+    });
   } catch (error) {
     next(error);
   }

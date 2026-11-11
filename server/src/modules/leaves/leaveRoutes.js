@@ -5,6 +5,8 @@ import {
   getLeaveBalances,
   applyLeave,
   getLeaveRequests,
+  getLeaveRequestById,
+  cancelLeaveRequest,
   reviewLeaveRequest,
 } from './leaveController.js';
 import { authenticate } from '../../middleware/authMiddleware.js';
@@ -20,6 +22,8 @@ router.post('/types', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), createLeaveTy
 router.get('/balances', getLeaveBalances);
 router.post('/apply', applyLeave);
 router.get('/requests', getLeaveRequests);
+router.get('/requests/:id', getLeaveRequestById);
+router.post('/requests/:id/cancel', cancelLeaveRequest);
 router.patch(
   '/requests/:id/review',
   requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.MANAGER),

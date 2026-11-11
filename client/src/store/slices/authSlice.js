@@ -1,55 +1,59 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import api from '../../services/api';
+import api, { getTabId, clearTabSessionStorage, purgeLegacySharedAuth } from '../../services/api';
 
 const getInitialStoredState = () => {
-  const token =
-    localStorage.getItem('pr_access_token') ||
-    sessionStorage.getItem('pr_access_token');
-  const userRaw =
-    localStorage.getItem('pr_user') ||
-    sessionStorage.getItem('pr_user');
-  const companyRaw =
-    localStorage.getItem('pr_company') ||
-    sessionStorage.getItem('pr_company');
+  purgeLegacySharedAuth();
+
+  const token = sessionStorage.getItem('pr_access_token');
+  const sessionId = sessionStorage.getItem('pr_session_id');
+  const userRaw = sessionStorage.getItem('pr_user');
+  const companyRaw = sessionStorage.getItem('pr_company');
+  const sessionRaw = sessionStorage.getItem('pr_session_meta');
 
   let user = null;
   let company = null;
+  let session = null;
   try {
     if (userRaw) user = JSON.parse(userRaw);
     if (companyRaw) company = JSON.parse(companyRaw);
+    if (sessionRaw) session = JSON.parse(sessionRaw);
   } catch (_) {}
 
-  return { token, user, company };
+  return { token, sessionId, user, company, session, tabId: getTabId() };
 };
 
-const { token: storedToken, user: storedUser, company: storedCompany } = getInitialStoredState();
+const {
+  token: storedToken,
+  sessionId: storedSessionId,
+  user: storedUser,
+  company: storedCompany,
+  session: storedSession,
+  tabId: initialTabId,
+} = getInitialStoredState();
 
 export const loginUser = createAsyncThunk('auth/login', async (credentials, { rejectWithValue }) => {
   try {
-    const res = await api.post('/auth/login', credentials);
+    const tabId = getTabId();
+    const res = await api.post('/auth/login', { ...credentials, tabId });
     const payload = res?.data || res;
     const user = payload?.user;
+    const employee = payload?.employee || null;
     const company = payload?.company || payload?.tenant;
     const token = payload?.tokens?.accessToken || payload?.accessToken;
     const refreshToken = payload?.tokens?.refreshToken || payload?.refreshToken;
-    const rememberMe = credentials?.rememberMe ?? true;
+    const session = payload?.session || null;
+    const sessionId = session?.sessionId || null;
 
-    const targetStorage = rememberMe ? localStorage : sessionStorage;
-    const alternateStorage = rememberMe ? sessionStorage : localStorage;
+    // Store strictly in this tab's sessionStorage so other tabs are never overwritten
+    purgeLegacySharedAuth();
+    if (token) sessionStorage.setItem('pr_access_token', token);
+    if (refreshToken) sessionStorage.setItem('pr_refresh_token', refreshToken);
+    if (sessionId) sessionStorage.setItem('pr_session_id', sessionId);
+    if (session) sessionStorage.setItem('pr_session_meta', JSON.stringify(session));
+    if (user) sessionStorage.setItem('pr_user', JSON.stringify(user));
+    if (company) sessionStorage.setItem('pr_company', JSON.stringify(company));
 
-    alternateStorage.removeItem('pr_access_token');
-    alternateStorage.removeItem('pr_refresh_token');
-    alternateStorage.removeItem('pr_user');
-    alternateStorage.removeItem('pr_company');
-    alternateStorage.removeItem('pr_remember_me');
-
-    if (token) targetStorage.setItem('pr_access_token', token);
-    if (refreshToken) targetStorage.setItem('pr_refresh_token', refreshToken);
-    if (user) targetStorage.setItem('pr_user', JSON.stringify(user));
-    if (company) targetStorage.setItem('pr_company', JSON.stringify(company));
-    targetStorage.setItem('pr_remember_me', rememberMe ? 'true' : 'false');
-
-    return { user, company, token };
+    return { user, employee, company, token, sessionId, session };
   } catch (err) {
     return rejectWithValue(err.message);
   }
@@ -61,15 +65,19 @@ export const fetchMe = createAsyncThunk('auth/fetchMe', async (_, { rejectWithVa
     const payload = res?.data || res;
     const user = payload?.user;
     const company = payload?.company || payload?.tenant;
-    const employee = payload?.employee;
+    const employee = payload?.employee || null;
+    const session = payload?.session || null;
 
-    const rememberMe = (localStorage.getItem('pr_remember_me') !== 'false');
-    const targetStorage = rememberMe ? localStorage : sessionStorage;
+    if (user) sessionStorage.setItem('pr_user', JSON.stringify(user));
+    if (company) sessionStorage.setItem('pr_company', JSON.stringify(company));
+    if (session) {
+      sessionStorage.setItem('pr_session_meta', JSON.stringify(session));
+      if (session.sessionId) {
+        sessionStorage.setItem('pr_session_id', session.sessionId);
+      }
+    }
 
-    if (user) targetStorage.setItem('pr_user', JSON.stringify(user));
-    if (company) targetStorage.setItem('pr_company', JSON.stringify(company));
-
-    return { user, company, employee };
+    return { user, company, employee, session };
   } catch (err) {
     return rejectWithValue(err.message);
   }
@@ -78,22 +86,20 @@ export const fetchMe = createAsyncThunk('auth/fetchMe', async (_, { rejectWithVa
 export const logoutUser = createAsyncThunk('auth/logout', async () => {
   try {
     await api.post('/auth/logout');
-  } catch (err) {
+  } catch (_) {
     // Ignore error on logout
   }
-  localStorage.removeItem('pr_access_token');
-  localStorage.removeItem('pr_refresh_token');
-  localStorage.removeItem('pr_user');
-  localStorage.removeItem('pr_company');
-  localStorage.removeItem('pr_tenant');
-  localStorage.removeItem('pr_remember_me');
+  clearTabSessionStorage();
+  return null;
+});
 
-  sessionStorage.removeItem('pr_access_token');
-  sessionStorage.removeItem('pr_refresh_token');
-  sessionStorage.removeItem('pr_user');
-  sessionStorage.removeItem('pr_company');
-  sessionStorage.removeItem('pr_remember_me');
-
+export const logoutAllSessions = createAsyncThunk('auth/logoutAll', async () => {
+  try {
+    await api.post('/auth/logout-all');
+  } catch (_) {
+    // Ignore error on logout-all
+  }
+  clearTabSessionStorage();
   return null;
 });
 
@@ -101,9 +107,13 @@ const authSlice = createSlice({
   name: 'auth',
   initialState: {
     user: storedUser,
+    employee: null,
     company: storedCompany,
     tenant: storedCompany,
     token: storedToken,
+    sessionId: storedSessionId,
+    session: storedSession,
+    tabId: initialTabId,
     isAuthenticated: !!storedToken,
     isLoading: false,
     error: null,
@@ -113,29 +123,26 @@ const authSlice = createSlice({
       state.error = null;
     },
     setCredentials: (state, action) => {
-      const { user, accessToken, refreshToken, company, rememberMe = true } = action.payload;
+      const { user, accessToken, refreshToken, company, session } = action.payload;
+      const sessionId = session?.sessionId || state.sessionId;
+
       state.user = user;
       state.token = accessToken;
+      state.sessionId = sessionId;
+      state.session = session || state.session;
       state.company = company || state.company;
       state.tenant = company || state.tenant;
       state.isAuthenticated = true;
       state.isLoading = false;
       state.error = null;
 
-      const targetStorage = rememberMe ? localStorage : sessionStorage;
-      const alternateStorage = rememberMe ? sessionStorage : localStorage;
-
-      alternateStorage.removeItem('pr_access_token');
-      alternateStorage.removeItem('pr_refresh_token');
-      alternateStorage.removeItem('pr_user');
-      alternateStorage.removeItem('pr_company');
-      alternateStorage.removeItem('pr_remember_me');
-
-      if (accessToken) targetStorage.setItem('pr_access_token', accessToken);
-      if (refreshToken) targetStorage.setItem('pr_refresh_token', refreshToken);
-      if (user) targetStorage.setItem('pr_user', JSON.stringify(user));
-      if (company) targetStorage.setItem('pr_company', JSON.stringify(company));
-      targetStorage.setItem('pr_remember_me', rememberMe ? 'true' : 'false');
+      purgeLegacySharedAuth();
+      if (accessToken) sessionStorage.setItem('pr_access_token', accessToken);
+      if (refreshToken) sessionStorage.setItem('pr_refresh_token', refreshToken);
+      if (sessionId) sessionStorage.setItem('pr_session_id', sessionId);
+      if (session) sessionStorage.setItem('pr_session_meta', JSON.stringify(session));
+      if (user) sessionStorage.setItem('pr_user', JSON.stringify(user));
+      if (company) sessionStorage.setItem('pr_company', JSON.stringify(company));
     },
   },
   extraReducers: (builder) => {
@@ -149,8 +156,12 @@ const authSlice = createSlice({
         state.isLoading = false;
         state.isAuthenticated = true;
         state.user = action.payload.user;
-        state.tenant = action.payload.tenant;
+        state.employee = action.payload.employee;
+        state.company = action.payload.company;
+        state.tenant = action.payload.company;
         state.token = action.payload.token;
+        state.sessionId = action.payload.sessionId;
+        state.session = action.payload.session;
       })
       .addCase(loginUser.rejected, (state, action) => {
         state.isLoading = false;
@@ -159,13 +170,34 @@ const authSlice = createSlice({
       // FetchMe
       .addCase(fetchMe.fulfilled, (state, action) => {
         state.user = action.payload.user;
-        state.tenant = action.payload.tenant;
+        state.employee = action.payload.employee;
+        state.company = action.payload.company;
+        state.tenant = action.payload.company;
+        if (action.payload.session) {
+          state.session = action.payload.session;
+          state.sessionId = action.payload.session.sessionId || state.sessionId;
+        }
       })
-      // Logout
+      // Logout (single tab)
       .addCase(logoutUser.fulfilled, (state) => {
         state.user = null;
+        state.employee = null;
+        state.company = null;
         state.tenant = null;
         state.token = null;
+        state.sessionId = null;
+        state.session = null;
+        state.isAuthenticated = false;
+      })
+      // Logout All Sessions
+      .addCase(logoutAllSessions.fulfilled, (state) => {
+        state.user = null;
+        state.employee = null;
+        state.company = null;
+        state.tenant = null;
+        state.token = null;
+        state.sessionId = null;
+        state.session = null;
         state.isAuthenticated = false;
       });
   },
