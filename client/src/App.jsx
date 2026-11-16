@@ -2,6 +2,7 @@ import React, { useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchMe } from './store/slices/authSlice';
+import { invalidateMasterData, clearMasterData } from './store/slices/masterDataSlice';
 import { Toaster } from 'react-hot-toast';
 
 // Layout & Guards
@@ -54,11 +55,35 @@ export default function App() {
     document.title = 'PR VISION HRMS | People. Process. Performance.';
   }, []);
 
+  // Synchronize user session ONLY on initial app boot if an existing per-tab token is present
+  // (fresh login already supplies full user/employee/company/session payload without extra /auth/me).
   useEffect(() => {
-    if (token) {
+    const bootToken =
+      typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('pr_access_token') : null;
+    if (bootToken || token) {
       dispatch(fetchMe());
     }
-  }, [dispatch, token]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatch]);
+
+  // Synchronize Redux masterData slice with API mutations and session clears across pages
+  useEffect(() => {
+    const onDataMutated = (event) => {
+      const tags = event?.detail?.affectedTags || event?.detail?.tags || [];
+      if (tags.includes('master-data')) {
+        dispatch(invalidateMasterData());
+      }
+    };
+    const onSessionCleared = () => {
+      dispatch(clearMasterData());
+    };
+    window.addEventListener('hrms:data-mutated', onDataMutated);
+    window.addEventListener('hrms:session-cleared', onSessionCleared);
+    return () => {
+      window.removeEventListener('hrms:data-mutated', onDataMutated);
+      window.removeEventListener('hrms:session-cleared', onSessionCleared);
+    };
+  }, [dispatch]);
 
   return (
     <BrowserRouter>

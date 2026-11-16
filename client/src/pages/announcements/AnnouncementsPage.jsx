@@ -28,12 +28,13 @@ export default function AnnouncementsPage() {
 
   const canManage = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
 
-  const fetchAnnouncements = async (showSpinner = false) => {
+  const fetchAnnouncements = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
     try {
-      const res = await api.get('/announcements');
+      const res = await api.get('/announcements', { signal, cacheTtl: 15000 });
       setAnnouncements(res.data?.announcements || res.announcements || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load notices.');
     } finally {
       setIsLoading(false);
@@ -41,7 +42,9 @@ export default function AnnouncementsPage() {
   };
 
   useEffect(() => {
-    fetchAnnouncements(true);
+    const controller = new AbortController();
+    fetchAnnouncements(true, controller.signal);
+    return () => controller.abort();
   }, []);
 
   const handleCreate = async (e) => {

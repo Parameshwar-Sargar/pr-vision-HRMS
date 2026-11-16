@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import Shift from '../../models/Shift.js';
 import { ROLES } from '../../config/constants.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 
 const shiftSchema = z.object({
   name: z.string().min(2, 'Shift name is required'),
@@ -29,8 +29,17 @@ export const getShifts = async (req, res, next) => {
       }
     }
 
-    const shifts = await Shift.find(query).sort({ createdAt: -1 });
-    return sendSuccess(res, 'Shifts retrieved.', { shifts });
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 200 });
+
+    const [shifts, total] = await Promise.all([
+      Shift.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Shift.countDocuments(query),
+    ]);
+
+    return sendSuccess(res, 'Shifts retrieved.', {
+      shifts,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }

@@ -39,29 +39,10 @@ export const seedDevAdmin = async ({ disconnect = false } = {}) => {
     const adminName = env.DEV_ADMIN_NAME || 'PR VISION Admin';
     const adminPassword = env.DEV_ADMIN_PASSWORD || 'Password@123';
 
-    let user = await User.findOne({ email: adminEmail });
+    let user = await User.findOne({ email: adminEmail }).lean();
 
     if (user) {
-      console.log(`[DEV_ADMIN_SEED] ✅ Admin account exists (${user.email}). Preserving existing password.`);
-      // Sync name and active status without modifying the password hash
-      let modified = false;
-      if (user.name !== adminName) {
-        user.name = adminName;
-        modified = true;
-      }
-      if (!user.isActive) {
-        user.isActive = true;
-        modified = true;
-      }
-      if (user.role !== ROLES.ADMIN) {
-        user.role = ROLES.ADMIN;
-        user.permissions = ROLE_DEFAULT_PERMISSIONS.ADMIN;
-        modified = true;
-      }
-      if (modified) {
-        await user.save();
-        console.log(`[DEV_ADMIN_SEED] Updated Admin profile attributes (name: "${user.name}", role: ${user.role}).`);
-      }
+      console.log(`[DEV_ADMIN_SEED] ✅ Admin account verified (${user.email}). Preserving existing account and password.`);
       if (disconnect) await disconnectDB();
       return { created: false, user };
     }

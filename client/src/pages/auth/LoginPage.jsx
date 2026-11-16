@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
 import { setCredentials } from '../../store/slices/authSlice';
+import { clearMasterData } from '../../store/slices/masterDataSlice';
+import queryCache from '../../services/queryCache';
 import api, { getTabId } from '../../services/api';
 import { toast } from 'react-hot-toast';
 import {
@@ -61,7 +63,18 @@ export default function LoginPage() {
         throw new Error('Malformed authentication response received from server.');
       }
 
-      dispatch(setCredentials({ user, accessToken, refreshToken, company, session }));
+      queryCache.clear();
+      dispatch(clearMasterData());
+      dispatch(
+        setCredentials({
+          user,
+          employee: payload?.employee || null,
+          accessToken,
+          refreshToken,
+          company,
+          session,
+        })
+      );
       toast.success(`Welcome back, ${user.name}!`);
 
       navigate('/dashboard');
@@ -101,7 +114,18 @@ export default function LoginPage() {
         throw new Error('Malformed authentication response received from server.');
       }
 
-      dispatch(setCredentials({ user, accessToken, refreshToken, company, session }));
+      queryCache.clear();
+      dispatch(clearMasterData());
+      dispatch(
+        setCredentials({
+          user,
+          employee: payload?.employee || null,
+          accessToken,
+          refreshToken,
+          company,
+          session,
+        })
+      );
       toast.success(`Logged in as ${user.name} (${user.role.replace('_', ' ')})`);
       navigate('/dashboard');
     } catch (err) {

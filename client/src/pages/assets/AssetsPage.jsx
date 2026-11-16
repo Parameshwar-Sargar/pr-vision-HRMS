@@ -32,16 +32,21 @@ export default function AssetsPage() {
 
   const canManage = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
 
-  const fetchAssetsData = async (showSpinner = false) => {
+  const fetchAssetsData = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
     try {
       const [astRes, empRes] = await Promise.all([
-        api.get('/assets'),
-        canManage ? api.get('/employees?limit=100').catch(() => ({ data: { employees: [] } })) : Promise.resolve({ data: { employees: [] } }),
+        api.get('/assets', { signal, cacheTtl: 10000 }),
+        canManage
+          ? api
+              .get('/employees', { params: { limit: 100 }, signal, cacheTtl: 60000 })
+              .catch(() => ({ data: { employees: [] } }))
+          : Promise.resolve({ data: { employees: [] } }),
       ]);
       setAssets(astRes.data?.assets || astRes.assets || []);
       setEmployees(empRes.data?.employees || empRes.employees || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load assets.');
     } finally {
       setIsLoading(false);
@@ -49,7 +54,9 @@ export default function AssetsPage() {
   };
 
   useEffect(() => {
-    fetchAssetsData(true);
+    const controller = new AbortController();
+    fetchAssetsData(true, controller.signal);
+    return () => controller.abort();
   }, []);
 
   const handleCreateAsset = async (e) => {

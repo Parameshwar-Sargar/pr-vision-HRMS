@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import api from '../../services/api';
+import api, { downloadAuthenticatedFile } from '../../services/api';
 import toast from 'react-hot-toast';
 import { FileText, Upload, Download, Filter, Plus, X } from 'lucide-react';
 
@@ -15,20 +15,34 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    fetchDocuments();
+    const controller = new AbortController();
+    fetchDocuments(controller.signal);
+    return () => controller.abort();
   }, [categoryFilter]);
 
-  const fetchDocuments = async () => {
+  const fetchDocuments = async (signal = null) => {
     try {
       setLoading(true);
       const params = {};
       if (categoryFilter) params.category = categoryFilter;
-      const res = await api.get('/documents', { params });
-      setDocuments(res.data.documents || []);
+      const res = await api.get('/documents', { params, signal, cacheTtl: 15000 });
+      setDocuments(res.data?.documents || res.documents || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load documents');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDownloadDocument = async (doc) => {
+    try {
+      toast.loading(`Downloading "${doc.title}"...`, { id: 'doc-dl' });
+      const url = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/documents/${doc._id}/download`;
+      await downloadAuthenticatedFile(url, `${doc.title || 'document'}.${doc.fileType?.split('/')?.[1] || 'pdf'}`);
+      toast.success('Download complete!', { id: 'doc-dl' });
+    } catch (err) {
+      toast.error(err.message || 'Download failed', { id: 'doc-dl' });
     }
   };
 
@@ -131,15 +145,14 @@ export default function DocumentsPage() {
                 <span className="text-slate-400">
                   {new Date(doc.createdAt).toLocaleDateString()}
                 </span>
-                <a
-                  href={`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/documents/${doc._id}/download`}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={() => handleDownloadDocument(doc)}
                   className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-bold"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Download</span>
-                </a>
+                </button>
               </div>
             </div>
           ))

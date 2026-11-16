@@ -30,12 +30,13 @@ export default function GrievancesPage() {
 
   const canResolve = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
 
-  const fetchGrievances = async (showSpinner = false) => {
+  const fetchGrievances = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
     try {
-      const res = await api.get('/grievances');
+      const res = await api.get('/grievances', { signal, cacheTtl: 10000 });
       setGrievances(res.data?.grievances || res.grievances || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load tickets.');
     } finally {
       setIsLoading(false);
@@ -43,7 +44,9 @@ export default function GrievancesPage() {
   };
 
   useEffect(() => {
-    fetchGrievances(true);
+    const controller = new AbortController();
+    fetchGrievances(true, controller.signal);
+    return () => controller.abort();
   }, []);
 
   const handleSubmitTicket = async (e) => {

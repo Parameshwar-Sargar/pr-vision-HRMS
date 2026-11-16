@@ -3,9 +3,9 @@ import JobOpening from '../../models/JobOpening.js';
 import Candidate from '../../models/Candidate.js';
 import Employee from '../../models/Employee.js';
 import User from '../../models/User.js';
-import Department from '../../models/Department.js';
 import { ROLES, LIFECYCLE_STAGES, ROLE_DEFAULT_PERMISSIONS } from '../../config/constants.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { isValidObjectId } from '../../utils/securityUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 import { logAudit } from '../../middleware/auditMiddleware.js';
 
 const jobOpeningSchema = z.object({
@@ -39,22 +39,43 @@ const candidateSchema = z.object({
 // Job Openings
 export const getJobOpenings = async (req, res, next) => {
   try {
-    const jobs = await JobOpening.find()
-      .populate('departmentId', 'name')
-      .populate('designationId', 'title')
-      .populate('branchId', 'name code')
-      .sort({ createdAt: -1 });
+    const { status, departmentId } = req.query;
+    const query = {};
+    if (status) query.status = status;
+    if (departmentId) query.departmentId = departmentId;
 
-    const jobsWithCandidateCounts = await Promise.all(
-      jobs.map(async (job) => {
-        const count = await Candidate.countDocuments({ jobOpeningId: job._id });
-        const obj = job.toObject();
-        obj.candidateCount = count;
-        return obj;
-      })
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+
+    const [jobs, total, candidateCounts] = await Promise.all([
+      JobOpening.find(query)
+        .populate('departmentId', 'name')
+        .populate('designationId', 'title')
+        .populate('branchId', 'name code')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      JobOpening.countDocuments(query),
+      Candidate.aggregate([
+        { $group: { _id: '$jobOpeningId', count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const countMap = new Map(
+      candidateCounts
+        .filter((c) => c._id != null)
+        .map((c) => [c._id.toString(), c.count])
     );
 
-    return sendSuccess(res, 'Job openings retrieved.', { jobs: jobsWithCandidateCounts });
+    const jobsWithCandidateCounts = jobs.map((job) => ({
+      ...job,
+      candidateCount: countMap.get(job._id.toString()) || 0,
+    }));
+
+    return sendSuccess(res, 'Job openings retrieved.', {
+      jobs: jobsWithCandidateCounts,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -76,6 +97,7 @@ export const createJobOpening = async (req, res, next) => {
 export const updateJobOpening = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) return sendError(res, 'Invalid job opening ID.', [], 400);
     const validated = jobOpeningSchema.parse(req.body);
 
     const job = await JobOpening.findById(id);
@@ -94,22 +116,42 @@ export const updateJobOpening = async (req, res, next) => {
 // Candidates
 export const getCandidates = async (req, res, next) => {
   try {
-    const { jobOpeningId, status } = req.query;
+    const { jobOpeningId, status, stage } = req.query;
     const query = {};
 
-    if (jobOpeningId) query.jobOpeningId = jobOpeningId;
+    if (jobOpeningId) {
+      if (!isValidObjectId(jobOpeningId)) return sendError(res, 'Invalid job opening ID.', [], 400);
+      query.jobOpeningId = jobOpeningId;
+    }
     if (status) query.status = status;
+    if (stage) query.stage = stage;
 
-    const candidates = await Candidate.find(query)
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+
+    const candidateQuery = Candidate.find(query)
       .populate({
         path: 'jobOpeningId',
         select: 'title departmentId',
         populate: { path: 'departmentId', select: 'name' },
       })
       .populate('convertedToEmployeeId', 'employeeId firstName lastName email')
-      .sort({ appliedDate: -1 });
+      .sort({ appliedDate: -1 })
+      .skip(skip)
+      .limit(limit);
 
-    return sendSuccess(res, 'Candidates retrieved.', { candidates });
+    if (req.user?.role === ROLES.MANAGER) {
+      candidateQuery.select('-currentCtc -expectedCtc');
+    }
+
+    const [candidates, total] = await Promise.all([
+      candidateQuery.lean(),
+      Candidate.countDocuments(query),
+    ]);
+
+    return sendSuccess(res, 'Candidates retrieved.', {
+      candidates,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -128,6 +170,7 @@ export const addCandidate = async (req, res, next) => {
 export const updateCandidateStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) return sendError(res, 'Invalid candidate ID.', [], 400);
     const { status, rating, notes, interviewSchedule } = req.body;
 
     const candidate = await Candidate.findById(id);
@@ -151,6 +194,8 @@ export const updateCandidateStatus = async (req, res, next) => {
 export const convertCandidateToEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) return sendError(res, 'Invalid candidate ID.', [], 400);
+
     const {
       branchId,
       departmentId: customDeptId,
@@ -169,6 +214,15 @@ export const convertCandidateToEmployee = async (req, res, next) => {
       return sendError(res, 'This candidate has already been converted to an employee.', [], 400);
     }
 
+    const normalizedEmail = candidate.email.trim().toLowerCase();
+    const [existingEmployee, existingUser] = await Promise.all([
+      Employee.findOne({ email: normalizedEmail, isDeleted: false }).select('_id').lean(),
+      User.findOne({ email: normalizedEmail }).select('_id').lean(),
+    ]);
+    if (existingEmployee || existingUser) {
+      return sendError(res, 'An employee or user account with this email already exists.', [], 409);
+    }
+
     // Split name
     const nameParts = candidate.fullName.trim().split(' ');
     const firstName = nameParts[0] || 'Employee';
@@ -181,28 +235,38 @@ export const convertCandidateToEmployee = async (req, res, next) => {
       return sendError(res, 'Department is required to onboard this candidate.', [], 400);
     }
 
-    // Generate unique employee ID
-    const count = await Employee.countDocuments();
-    const employeeId = `PRV-${String(count + 1).padStart(4, '0')}`;
-
-    // Provision user account
-    let user = await User.findOne({ email: candidate.email.toLowerCase() });
-    if (!user) {
-      user = await User.create({
-        name: candidate.fullName,
-        email: candidate.email.toLowerCase(),
-        password,
-        role: ROLES.EMPLOYEE,
-        branchId: branchId || null,
-        permissions: ROLE_DEFAULT_PERMISSIONS.EMPLOYEE,
-      });
+    // Generate collision-safe PRV-XXXX employee ID
+    const [existingPrv, totalCount] = await Promise.all([
+      Employee.find({ employeeId: /^PRV-\d{4,}$/ }).select('employeeId').lean(),
+      Employee.countDocuments(),
+    ]);
+    let maxNum = 0;
+    for (const e of existingPrv) {
+      const parsedNum = parseInt(String(e.employeeId).replace(/^PRV-/, ''), 10);
+      if (!Number.isNaN(parsedNum) && parsedNum > maxNum) maxNum = parsedNum;
     }
+    let nextNum = Math.max(maxNum + 1, totalCount + 1);
+    let employeeId = `PRV-${String(nextNum).padStart(4, '0')}`;
+    while (await Employee.findOne({ employeeId }).select('_id').lean()) {
+      nextNum += 1;
+      employeeId = `PRV-${String(nextNum).padStart(4, '0')}`;
+    }
+
+    // Provision new user account
+    const user = await User.create({
+      name: candidate.fullName,
+      email: normalizedEmail,
+      password,
+      role: ROLES.EMPLOYEE,
+      branchId: branchId || null,
+      permissions: ROLE_DEFAULT_PERMISSIONS.EMPLOYEE,
+    });
 
     const employee = await Employee.create({
       employeeId,
       firstName,
       lastName,
-      email: candidate.email.toLowerCase(),
+      email: normalizedEmail,
       phone: candidate.phone || '',
       departmentId,
       designationId: designationId || null,

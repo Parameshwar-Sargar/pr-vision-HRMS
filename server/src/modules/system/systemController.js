@@ -3,7 +3,8 @@ import AuditLog from '../../models/AuditLog.js';
 import User from '../../models/User.js';
 import Employee from '../../models/Employee.js';
 import { ROLES, PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } from '../../config/constants.js';
-import { sendSuccess } from '../../utils/responseUtils.js';
+import { sanitizeAuditDetails } from '../../utils/securityUtils.js';
+import { sendSuccess, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 
 export const getRolesAndPermissions = async (req, res, next) => {
   try {
@@ -29,30 +30,31 @@ export const getRolesAndPermissions = async (req, res, next) => {
 
 export const getAuditLogs = async (req, res, next) => {
   try {
-    const { action, entity, page = 1, limit = 50 } = req.query;
+    const { action, entity } = req.query;
     const query = {};
 
     if (action) query.action = action;
     if (entity) query.entity = entity;
 
-    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
     const [total, logs] = await Promise.all([
       AuditLog.countDocuments(query),
       AuditLog.find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(parseInt(limit, 10))
+        .limit(limit)
         .populate('actorId', 'name email role')
         .lean(),
     ]);
 
+    const sanitizedLogs = logs.map((log) => ({
+      ...log,
+      details: sanitizeAuditDetails(log.details),
+    }));
+
     return sendSuccess(res, 'Audit logs retrieved.', {
-      logs,
-      pagination: {
-        total,
-        page: parseInt(page, 10),
-        pages: Math.ceil(total / parseInt(limit, 10)),
-      },
+      logs: sanitizedLogs,
+      pagination: buildPaginationMeta(total, page, limit),
     });
   } catch (error) {
     next(error);

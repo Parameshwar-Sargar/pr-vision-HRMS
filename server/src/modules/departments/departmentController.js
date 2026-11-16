@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import Department from '../../models/Department.js';
+import Branch from '../../models/Branch.js';
 import Employee from '../../models/Employee.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 
 const departmentSchema = z.object({
   name: z.string().min(2, 'Department name must be at least 2 characters'),
@@ -17,12 +18,17 @@ export const getDepartments = async (req, res, next) => {
     const filter = { isDeleted: false };
     if (branchId) filter.branchId = branchId;
 
-    const [departments, counts] = await Promise.all([
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 200 });
+
+    const [departments, total, counts] = await Promise.all([
       Department.find(filter)
         .populate('headId', 'firstName lastName employeeId email')
         .populate('branchId', 'name code')
         .sort({ name: 1 })
+        .skip(skip)
+        .limit(limit)
         .lean(),
+      Department.countDocuments(filter),
       Employee.aggregate([
         { $match: { isDeleted: false } },
         { $group: { _id: '$departmentId', count: { $sum: 1 } } },
@@ -35,7 +41,10 @@ export const getDepartments = async (req, res, next) => {
       employeeCount: countMap.get(dept._id.toString()) || 0,
     }));
 
-    return sendSuccess(res, 'Departments retrieved.', { departments: deptsWithCount });
+    return sendSuccess(res, 'Departments retrieved.', {
+      departments: deptsWithCount,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -48,7 +57,9 @@ export const createDepartment = async (req, res, next) => {
     const exists = await Department.findOne({
       name: { $regex: new RegExp(`^${validated.name}$`, 'i') },
       isDeleted: false,
-    }).lean();
+    })
+      .select('_id')
+      .lean();
     if (exists) {
       return sendError(res, 'Department with this name already exists in your company.', [], 409);
     }

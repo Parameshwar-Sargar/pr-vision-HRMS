@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { Clock, Plus, CheckCircle, Trash2, X } from 'lucide-react';
+import { addShift, removeShift } from '../../store/slices/masterDataSlice';
 
 export default function ShiftsPage() {
+  const dispatch = useDispatch();
   const [shifts, setShifts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -18,15 +21,18 @@ export default function ShiftsPage() {
   });
 
   useEffect(() => {
-    fetchShifts();
+    const controller = new AbortController();
+    fetchShifts(controller.signal);
+    return () => controller.abort();
   }, []);
 
-  const fetchShifts = async () => {
+  const fetchShifts = async (signal = null) => {
     try {
       setLoading(true);
-      const res = await api.get('/shifts');
-      setShifts(res.data.shifts || []);
+      const res = await api.get('/shifts', { signal, cacheTtl: 30000 });
+      setShifts(res.data?.shifts || res.shifts || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load shift timings');
     } finally {
       setLoading(false);
@@ -36,7 +42,11 @@ export default function ShiftsPage() {
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/shifts', form);
+      const res = await api.post('/shifts', form);
+      const created = res.data?.shift || res.shift;
+      if (created) {
+        dispatch(addShift(created));
+      }
       toast.success('Shift schedule created!');
       setShowModal(false);
       setForm({
@@ -58,6 +68,7 @@ export default function ShiftsPage() {
     if (!window.confirm('Delete this shift schedule?')) return;
     try {
       await api.delete(`/shifts/${id}`);
+      dispatch(removeShift(id));
       toast.success('Shift deleted');
       fetchShifts();
     } catch (err) {

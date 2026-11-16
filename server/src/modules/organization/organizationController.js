@@ -1,21 +1,26 @@
 import CompanySettings from '../../models/CompanySettings.js';
 import Branch from '../../models/Branch.js';
 import Employee from '../../models/Employee.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { isValidObjectId, sanitizeCompanyForRole, sanitizeAuditDetails } from '../../utils/securityUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 import { logAudit } from '../../middleware/auditMiddleware.js';
+import { invalidateCompanySettingsCache } from '../auth/authController.js';
 
 // Company Profile & Settings
 export const getCompanySettings = async (req, res, next) => {
   try {
-    let settings = await CompanySettings.findOne();
+    let settings = await CompanySettings.findOne().lean();
     if (!settings) {
-      settings = await CompanySettings.create({
+      const created = await CompanySettings.create({
         companyName: 'PR VISION INNOVATIONS',
         tagline: 'People. Process. Performance.',
         contactEmail: 'contact@prvision.com',
       });
+      settings = created.toObject();
     }
-    return sendSuccess(res, 'Company settings retrieved.', { company: settings });
+    return sendSuccess(res, 'Company settings retrieved.', {
+      company: sanitizeCompanyForRole(settings, req.user?.role),
+    });
   } catch (error) {
     next(error);
   }
@@ -60,16 +65,19 @@ export const updateCompanySettings = async (req, res, next) => {
     if (biometricConfig) settings.biometricConfig = { ...settings.biometricConfig, ...biometricConfig };
 
     await settings.save();
+    invalidateCompanySettingsCache();
 
     await logAudit({
       req,
       action: 'COMPANY_SETTINGS_UPDATED',
       entity: 'CompanySettings',
       entityId: settings._id,
-      details: req.body,
+      details: sanitizeAuditDetails(req.body),
     });
 
-    return sendSuccess(res, 'Company settings updated successfully.', { company: settings });
+    return sendSuccess(res, 'Company settings updated successfully.', {
+      company: sanitizeCompanyForRole(settings.toObject(), req.user?.role),
+    });
   } catch (error) {
     next(error);
   }
@@ -78,18 +86,32 @@ export const updateCompanySettings = async (req, res, next) => {
 // Branches CRUD
 export const getBranches = async (req, res, next) => {
   try {
-    const branches = await Branch.find({ isDeleted: false }).sort({ isHeadquarters: -1, name: 1 });
+    const query = { isDeleted: false };
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 200 });
 
-    const branchesWithCount = await Promise.all(
-      branches.map(async (b) => {
-        const count = await Employee.countDocuments({ branchId: b._id, isDeleted: false });
-        const obj = b.toObject();
-        obj.employeeCount = count;
-        return obj;
-      })
-    );
+    const [branches, total, counts] = await Promise.all([
+      Branch.find(query)
+        .sort({ isHeadquarters: -1, name: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Branch.countDocuments(query),
+      Employee.aggregate([
+        { $match: { isDeleted: false, branchId: { $ne: null } } },
+        { $group: { _id: '$branchId', count: { $sum: 1 } } },
+      ]),
+    ]);
 
-    return sendSuccess(res, 'Branches retrieved.', { branches: branchesWithCount });
+    const countMap = new Map(counts.map((c) => [c._id.toString(), c.count]));
+    const branchesWithCount = branches.map((b) => ({
+      ...b,
+      employeeCount: countMap.get(b._id.toString()) || 0,
+    }));
+
+    return sendSuccess(res, 'Branches retrieved.', {
+      branches: branchesWithCount,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -98,8 +120,11 @@ export const getBranches = async (req, res, next) => {
 export const createBranch = async (req, res, next) => {
   try {
     const { name, code, isHeadquarters, address, contactPhone, contactEmail, timezone } = req.body;
+    if (!name || !code) {
+      return sendError(res, 'Branch name and code are required.', [], 400);
+    }
 
-    const exists = await Branch.findOne({ code: code.toUpperCase(), isDeleted: false });
+    const exists = await Branch.findOne({ code: String(code).trim().toUpperCase(), isDeleted: false }).select('_id').lean();
     if (exists) {
       return sendError(res, 'A branch with this code already exists.', [], 409);
     }
@@ -109,8 +134,8 @@ export const createBranch = async (req, res, next) => {
     }
 
     const branch = await Branch.create({
-      name,
-      code: code.toUpperCase(),
+      name: String(name).trim(),
+      code: String(code).trim().toUpperCase(),
       isHeadquarters: !!isHeadquarters,
       address,
       contactPhone,
@@ -123,7 +148,7 @@ export const createBranch = async (req, res, next) => {
       action: 'BRANCH_CREATED',
       entity: 'Branch',
       entityId: branch._id,
-      details: { name, code },
+      details: { name: branch.name, code: branch.code },
     });
 
     return sendSuccess(res, 'Branch created successfully.', { branch }, 201);
@@ -135,16 +160,29 @@ export const createBranch = async (req, res, next) => {
 export const updateBranch = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid branch ID.', [], 400);
+    }
+
     const branch = await Branch.findOne({ _id: id, isDeleted: false });
     if (!branch) {
       return sendError(res, 'Branch not found.', [], 404);
     }
 
-    if (req.body.isHeadquarters) {
+    const { name, code, isHeadquarters, address, contactPhone, contactEmail, timezone } = req.body;
+
+    if (isHeadquarters) {
       await Branch.updateMany({ _id: { $ne: id } }, { isHeadquarters: false });
     }
 
-    Object.assign(branch, req.body);
+    if (name !== undefined) branch.name = String(name).trim();
+    if (code !== undefined) branch.code = String(code).trim().toUpperCase();
+    if (isHeadquarters !== undefined) branch.isHeadquarters = !!isHeadquarters;
+    if (address !== undefined) branch.address = address;
+    if (contactPhone !== undefined) branch.contactPhone = contactPhone;
+    if (contactEmail !== undefined) branch.contactEmail = contactEmail;
+    if (timezone !== undefined) branch.timezone = timezone;
+
     await branch.save();
 
     return sendSuccess(res, 'Branch updated successfully.', { branch });
@@ -156,12 +194,16 @@ export const updateBranch = async (req, res, next) => {
 export const deleteBranch = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid branch ID.', [], 400);
+    }
+
     const activeStaff = await Employee.countDocuments({ branchId: id, isDeleted: false });
     if (activeStaff > 0) {
       return sendError(res, `Cannot delete branch with ${activeStaff} active staff assigned.`, [], 400);
     }
 
-    const branch = await Branch.findById(id);
+    const branch = await Branch.findOne({ _id: id, isDeleted: false });
     if (!branch) return sendError(res, 'Branch not found.', [], 404);
 
     branch.isDeleted = true;
@@ -172,4 +214,3 @@ export const deleteBranch = async (req, res, next) => {
     next(error);
   }
 };
-

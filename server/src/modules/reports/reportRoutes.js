@@ -6,10 +6,21 @@ import { ROLES } from '../../config/constants.js';
 
 const router = Router();
 
-router.use(authenticate, requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.PAYROLL_ADMIN));
+router.use(authenticate);
 
-router.get('/employees', getEmployeeReport);
-router.get('/attendance', getAttendanceReport);
-router.get('/payroll', getPayrollReport);
+// Employees & Attendance reports (Admin, HR, Payroll Admin, and Manager strictly scoped to direct team)
+router.get(
+  '/employees',
+  requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.PAYROLL_ADMIN, ROLES.MANAGER),
+  getEmployeeReport
+);
+router.get(
+  '/attendance',
+  requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.PAYROLL_ADMIN, ROLES.MANAGER),
+  getAttendanceReport
+);
+
+// Payroll financial report strictly forbidden for Managers, Recruiters, and Employees
+router.get('/payroll', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.PAYROLL_ADMIN), getPayrollReport);
 
 export default router;

@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import Designation from '../../models/Designation.js';
+import Department from '../../models/Department.js';
 import Employee from '../../models/Employee.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 
 const designationSchema = z.object({
   title: z.string().min(2, 'Designation title must be at least 2 characters'),
@@ -19,12 +20,22 @@ export const getDesignations = async (req, res, next) => {
       query.departmentId = departmentId;
     }
 
-    const designations = await Designation.find(query)
-      .populate('departmentId', 'name code')
-      .sort({ level: 1, title: 1 })
-      .lean();
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 200 });
 
-    return sendSuccess(res, 'Designations retrieved.', { designations });
+    const [designations, total] = await Promise.all([
+      Designation.find(query)
+        .populate('departmentId', 'name code')
+        .sort({ level: 1, title: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Designation.countDocuments(query),
+    ]);
+
+    return sendSuccess(res, 'Designations retrieved.', {
+      designations,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -38,7 +49,9 @@ export const createDesignation = async (req, res, next) => {
       title: { $regex: new RegExp(`^${validated.title}$`, 'i') },
       departmentId: validated.departmentId,
       isDeleted: false,
-    }).lean();
+    })
+      .select('_id')
+      .lean();
     if (exists) {
       return sendError(res, 'This designation already exists in this department.', [], 409);
     }

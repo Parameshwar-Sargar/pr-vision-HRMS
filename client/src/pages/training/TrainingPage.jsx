@@ -36,16 +36,17 @@ export default function TrainingPage() {
 
   const canManage = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
 
-  const fetchTrainingData = async (showSpinner = false) => {
+  const fetchTrainingData = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
     try {
       const [progRes, assignRes] = await Promise.all([
-        api.get('/training/programs'),
-        api.get('/training/assignments'),
+        api.get('/training/programs', { signal, cacheTtl: 10000 }),
+        api.get('/training/assignments', { signal, cacheTtl: 10000 }),
       ]);
       setPrograms(progRes.data?.programs || progRes.programs || []);
       setAssignments(assignRes.data?.assignments || assignRes.assignments || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load training data.');
     } finally {
       setIsLoading(false);
@@ -53,7 +54,9 @@ export default function TrainingPage() {
   };
 
   useEffect(() => {
-    fetchTrainingData(true);
+    const controller = new AbortController();
+    fetchTrainingData(true, controller.signal);
+    return () => controller.abort();
   }, []);
 
   const handleCreateProgram = async (e) => {

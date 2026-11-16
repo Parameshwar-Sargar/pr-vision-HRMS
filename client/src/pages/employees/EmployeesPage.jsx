@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import api from '../../services/api';
+import { fetchMasterData, addDepartment } from '../../store/slices/masterDataSlice';
 import toast from 'react-hot-toast';
 import {
   Users,
@@ -22,11 +24,12 @@ import {
 } from 'lucide-react';
 
 export default function EmployeesPage() {
+  const dispatch = useDispatch();
+  const { departments, designations, branches, shifts, loading: masterLoading } = useSelector(
+    (state) => state.masterData
+  );
+
   const [employees, setEmployees] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [designations, setDesignations] = useState([]);
-  const [branches, setBranches] = useState([]);
-  const [shifts, setShifts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -63,46 +66,35 @@ export default function EmployeesPage() {
   });
 
   useEffect(() => {
-    fetchMetadata();
-  }, []);
+    dispatch(fetchMasterData(false));
+  }, [dispatch]);
 
   useEffect(() => {
-    fetchEmployees(employees.length === 0);
+    const controller = new AbortController();
+    fetchEmployees(employees.length === 0, controller.signal);
+    return () => controller.abort();
   }, [selectedDept, selectedStatus]);
 
-  const fetchEmployees = async (showSkeleton = false) => {
+  const fetchEmployees = async (showSkeleton = false, signal = null) => {
     try {
       if (showSkeleton) setLoading(true);
       const params = { limit: 100 };
       if (selectedDept) params.departmentId = selectedDept;
       if (selectedStatus) params.status = selectedStatus;
-      const res = await api.get('/employees', { params });
+      const res = await api.get('/employees', { params, signal, cacheTtl: 10000 });
       setEmployees(res.data?.employees || res.employees || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error(err.message || 'Failed to load employee directory', { id: 'emp-list-err' });
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchMetadata = async () => {
+  const fetchMetadata = async (force = false) => {
     try {
       setMetadataLoading(true);
-      const [deptRes, desigRes, branchRes, shiftRes] = await Promise.all([
-        api.get('/departments'),
-        api.get('/designations'),
-        api.get('/organization/branches').catch(() => ({ data: { branches: [] } })),
-        api.get('/shifts').catch(() => ({ data: { shifts: [] } })),
-      ]);
-      const depts = deptRes.data?.departments || deptRes.departments || [];
-      const desigs = desigRes.data?.designations || desigRes.designations || [];
-      const brs = branchRes.data?.branches || branchRes.branches || [];
-      const sfts = shiftRes.data?.shifts || shiftRes.shifts || [];
-
-      setDepartments(depts);
-      setDesignations(desigs);
-      setBranches(brs);
-      setShifts(sfts);
+      await dispatch(fetchMasterData(force)).unwrap();
     } catch (err) {
       console.error('Metadata fetch error:', err);
     } finally {
@@ -259,8 +251,8 @@ export default function EmployeesPage() {
       setShowQuickDeptModal(false);
       setQuickDeptForm({ name: '', code: '', description: '' });
 
-      // Refresh metadata and auto-select new department
-      await fetchMetadata();
+      // Add to shared masterData Redux store and auto-select new department
+      dispatch(addDepartment(newDept));
       if (newDept?._id) {
         setFormData((prev) => ({ ...prev, departmentId: newDept._id }));
       }

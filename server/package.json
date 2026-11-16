@@ -9,6 +9,7 @@
     "dev": "node --watch src/server.js",
     "seed": "node src/scripts/seed.js",
     "seed:admin": "node src/scripts/seedDevAdmin.js",
+    "db:sync-indexes": "node -e \"import('./src/app.js').then(() => import('./src/config/db.js')).then(async (db) => { await db.connectDB({ exitOnError: true }); await db.syncDatabaseIndexes(); await db.disconnectDB(); })\"",
     "test": "vitest run"
   },
   "dependencies": {

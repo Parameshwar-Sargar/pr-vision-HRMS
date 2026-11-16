@@ -14,7 +14,7 @@ router.use(authenticate, requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER));
 
 router.get('/roles-permissions', getRolesAndPermissions);
 router.get('/audit-logs', getAuditLogs);
-router.get('/diagnostics', getSystemDiagnostics);
+router.get('/diagnostics', requireRoles(ROLES.ADMIN), getSystemDiagnostics);
 
 export default router;
 

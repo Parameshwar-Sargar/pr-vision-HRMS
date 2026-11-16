@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import api, { getTabId, clearTabSessionStorage, purgeLegacySharedAuth } from '../../services/api';
+import { clearMasterData } from './masterDataSlice';
 
 const getInitialStoredState = () => {
   purgeLegacySharedAuth();
@@ -83,23 +84,25 @@ export const fetchMe = createAsyncThunk('auth/fetchMe', async (_, { rejectWithVa
   }
 });
 
-export const logoutUser = createAsyncThunk('auth/logout', async () => {
+export const logoutUser = createAsyncThunk('auth/logout', async (_, { dispatch }) => {
   try {
     await api.post('/auth/logout');
   } catch (_) {
     // Ignore error on logout
   }
   clearTabSessionStorage();
+  dispatch(clearMasterData());
   return null;
 });
 
-export const logoutAllSessions = createAsyncThunk('auth/logoutAll', async () => {
+export const logoutAllSessions = createAsyncThunk('auth/logoutAll', async (_, { dispatch }) => {
   try {
     await api.post('/auth/logout-all');
   } catch (_) {
     // Ignore error on logout-all
   }
   clearTabSessionStorage();
+  dispatch(clearMasterData());
   return null;
 });
 

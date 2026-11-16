@@ -11,7 +11,7 @@ export const requireRoles = (...roles) => {
 
     const userRole = String(req.user.role || '').toUpperCase().trim();
 
-    if (userRole === ROLES.ADMIN) {
+    if (userRole === ROLES.ADMIN || userRole === ROLES.SUPER_ADMIN) {
       return next();
     }
 
@@ -35,7 +35,7 @@ export const requirePermissions = (...permissions) => {
     }
 
     const userRole = String(req.user.role || '').toUpperCase().trim();
-    if (userRole === ROLES.ADMIN) {
+    if (userRole === ROLES.ADMIN || userRole === ROLES.SUPER_ADMIN) {
       return next();
     }
 

@@ -29,12 +29,13 @@ export default function ExpensesPage() {
 
   const canApprove = ['ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN', 'MANAGER'].includes(user?.role);
 
-  const fetchClaims = async (showSpinner = false) => {
+  const fetchClaims = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
     try {
-      const res = await api.get('/expenses');
+      const res = await api.get('/expenses', { signal, cacheTtl: 10000 });
       setClaims(res.data?.claims || res.claims || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load expense claims.');
     } finally {
       setIsLoading(false);
@@ -42,7 +43,9 @@ export default function ExpensesPage() {
   };
 
   useEffect(() => {
-    fetchClaims(true);
+    const controller = new AbortController();
+    fetchClaims(true, controller.signal);
+    return () => controller.abort();
   }, []);
 
   const handleSubmitClaim = async (e) => {

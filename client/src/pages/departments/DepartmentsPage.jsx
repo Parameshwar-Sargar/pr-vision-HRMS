@@ -1,9 +1,18 @@
 import React, { useEffect, useState } from 'react';
+import { useDispatch } from 'react-redux';
 import api from '../../services/api';
+import {
+  addDepartment,
+  updateDepartment as updateDeptAction,
+  removeDepartment,
+  addDesignation,
+  removeDesignation,
+} from '../../store/slices/masterDataSlice';
 import toast from 'react-hot-toast';
 import { Building2, Plus, Users, Trash2, Edit2, X, Briefcase, RefreshCw, Layers } from 'lucide-react';
 
 export default function DepartmentsPage() {
+  const dispatch = useDispatch();
   const [activeTab, setActiveTab] = useState('departments'); // 'departments' | 'designations'
   const [departments, setDepartments] = useState([]);
   const [designations, setDesignations] = useState([]);
@@ -20,19 +29,22 @@ export default function DepartmentsPage() {
   const [desigForm, setDesigForm] = useState({ title: '', departmentId: '', code: '', level: 1, description: '' });
 
   useEffect(() => {
-    fetchData(true);
+    const controller = new AbortController();
+    fetchData(true, controller.signal);
+    return () => controller.abort();
   }, []);
 
-  const fetchData = async (showSkeleton = false) => {
+  const fetchData = async (showSkeleton = false, signal = null) => {
     try {
       if (showSkeleton) setLoading(true);
       const [deptRes, desigRes] = await Promise.all([
-        api.get('/departments'),
-        api.get('/designations'),
+        api.get('/departments', { signal, cacheTtl: 30000 }),
+        api.get('/designations', { signal, cacheTtl: 30000 }),
       ]);
       setDepartments(deptRes.data?.departments || deptRes.departments || []);
       setDesignations(desigRes.data?.designations || desigRes.designations || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error(err.message || 'Failed to load organizational units', { id: 'org-fetch-error' });
     } finally {
       setLoading(false);
@@ -56,6 +68,7 @@ export default function DepartmentsPage() {
       });
       const created = res?.data?.department || res?.department;
       if (created) {
+        dispatch(addDepartment(created));
         setDepartments((prev) =>
           [...prev, created].sort((a, b) => (a.name || '').localeCompare(b.name || ''))
         );
@@ -83,6 +96,7 @@ export default function DepartmentsPage() {
       });
       const updated = res?.data?.department || res?.department;
       if (updated) {
+        dispatch(updateDeptAction(updated));
         setDepartments((prev) => prev.map((d) => (d._id === updated._id ? updated : d)));
       }
       toast.success('Department updated successfully!', { id: 'dept-update-success' });
@@ -118,6 +132,7 @@ export default function DepartmentsPage() {
       });
       const created = res?.data?.designation || res?.designation;
       if (created) {
+        dispatch(addDesignation(created));
         setDesignations((prev) => [...prev, created]);
       }
       toast.success('Designation created successfully!', { id: 'desig-success' });
@@ -135,6 +150,7 @@ export default function DepartmentsPage() {
     if (!window.confirm(`Are you sure you want to delete department "${name}"?`)) return;
     try {
       await api.delete(`/departments/${id}`);
+      dispatch(removeDepartment(id));
       setDepartments((prev) => prev.filter((d) => d._id !== id));
       toast.success('Department deleted', { id: 'dept-del' });
       fetchData(false);
@@ -147,6 +163,7 @@ export default function DepartmentsPage() {
     if (!window.confirm(`Are you sure you want to delete designation "${title}"?`)) return;
     try {
       await api.delete(`/designations/${id}`);
+      dispatch(removeDesignation(id));
       setDesignations((prev) => prev.filter((d) => d._id !== id));
       toast.success('Designation deleted', { id: 'desig-del' });
       fetchData(false);

@@ -5,7 +5,8 @@ import Payslip from '../../models/Payslip.js';
 import Employee from '../../models/Employee.js';
 import CompanySettings from '../../models/CompanySettings.js';
 import { PAYROLL_STATUS, ROLES } from '../../config/constants.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
+import { isPayrollPrivileged, isValidObjectId } from '../../utils/securityUtils.js';
 import { generatePayslipPDF } from '../../utils/pdfGenerator.js';
 import { logAudit } from '../../middleware/auditMiddleware.js';
 
@@ -47,7 +48,9 @@ export const getSalaryStructure = async (req, res, next) => {
     const structure = await SalaryStructure.findOne({
       employeeId,
       isActive: true,
-    }).populate('employeeId', 'firstName lastName employeeId email');
+    })
+      .populate('employeeId', 'firstName lastName employeeId email')
+      .lean();
 
     return sendSuccess(res, 'Salary structure retrieved.', { structure });
   } catch (error) {
@@ -58,6 +61,16 @@ export const getSalaryStructure = async (req, res, next) => {
 export const saveSalaryStructure = async (req, res, next) => {
   try {
     const validated = salaryStructureSchema.parse(req.body);
+    if (!isValidObjectId(validated.employeeId)) {
+      return sendError(res, 'Invalid employee ID format.', [], 400);
+    }
+
+    const employee = await Employee.findOne({ _id: validated.employeeId, isDeleted: false })
+      .select('_id')
+      .lean();
+    if (!employee) {
+      return sendError(res, 'Employee not found.', [], 404);
+    }
 
     // Deactivate previous active structures for this employee
     await SalaryStructure.updateMany(
@@ -90,7 +103,7 @@ export const saveSalaryStructure = async (req, res, next) => {
 };
 
 /**
- * Generate monthly payroll batch
+ * Generate monthly payroll batch (Optimized batch fetch + insertMany)
  */
 export const generatePayrollRun = async (req, res, next) => {
   try {
@@ -120,16 +133,36 @@ export const generatePayrollRun = async (req, res, next) => {
       await run.save();
     }
 
-    // Find all active employees
-    const activeEmployees = await Employee.find({ isDeleted: false, employmentStatus: 'Active' });
+    // Batch-fetch all active employees with minimal projection
+    const activeEmployees = await Employee.find({
+      isDeleted: false,
+      employmentStatus: 'Active',
+    })
+      .select('_id employeeId')
+      .lean();
+
+    const empIds = activeEmployees.map((emp) => emp._id);
+
+    // Batch-fetch all active salary structures in a single query (eliminates N+1 query loop)
+    const activeSalaries =
+      empIds.length > 0
+        ? await SalaryStructure.find({
+            employeeId: { $in: empIds },
+            isActive: true,
+          }).lean()
+        : [];
+
+    const salaryByEmpId = new Map(
+      activeSalaries.map((s) => [s.employeeId.toString(), s])
+    );
 
     let runTotalGross = 0;
     let runTotalDeductions = 0;
     let runTotalNet = 0;
-    let count = 0;
+    const payslipsToInsert = [];
 
     for (const emp of activeEmployees) {
-      const salary = await SalaryStructure.findOne({ employeeId: emp._id, isActive: true });
+      const salary = salaryByEmpId.get(emp._id.toString());
       if (!salary) continue;
 
       const basic = salary.basicSalary || 0;
@@ -187,7 +220,7 @@ export const generatePayrollRun = async (req, res, next) => {
 
       const payslipNumber = `PS-${parsedYear}${String(parsedMonth).padStart(2, '0')}-${emp.employeeId}`;
 
-      await Payslip.create({
+      payslipsToInsert.push({
         payrollRunId: run._id,
         employeeId: emp._id,
         month: parsedMonth,
@@ -207,9 +240,13 @@ export const generatePayrollRun = async (req, res, next) => {
       runTotalGross += gross;
       runTotalDeductions += totalDeductions;
       runTotalNet += netSalary;
-      count++;
     }
 
+    if (payslipsToInsert.length > 0) {
+      await Payslip.insertMany(payslipsToInsert);
+    }
+
+    const count = payslipsToInsert.length;
     run.totalEmployees = count;
     run.totalGrossSalary = runTotalGross;
     run.totalDeductions = runTotalDeductions;
@@ -236,12 +273,28 @@ export const generatePayrollRun = async (req, res, next) => {
  */
 export const getPayrollRuns = async (req, res, next) => {
   try {
-    const runs = await PayrollRun.find()
-      .sort({ year: -1, month: -1 })
-      .populate('processedBy', 'email')
-      .populate('approvedBy', 'email');
+    const { status, year } = req.query;
+    const query = {};
+    if (status) query.status = status;
+    if (year) query.year = parseInt(year, 10);
 
-    return sendSuccess(res, 'Payroll runs retrieved.', { runs });
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+
+    const [runs, total] = await Promise.all([
+      PayrollRun.find(query)
+        .sort({ year: -1, month: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('processedBy', 'email')
+        .populate('approvedBy', 'email')
+        .lean(),
+      PayrollRun.countDocuments(query),
+    ]);
+
+    return sendSuccess(res, 'Payroll runs retrieved.', {
+      runs,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -289,12 +342,19 @@ export const markPayrollPaid = async (req, res, next) => {
  */
 export const getPayslips = async (req, res, next) => {
   try {
-    const { employeeId, month, year, page = 1, limit = 20 } = req.query;
+    const { employeeId, month, year } = req.query;
 
     const query = {};
 
-    // Strict Data Isolation: Employees and Managers can only view their own payslips
-    if (req.user.role === ROLES.EMPLOYEE || req.user.role === ROLES.MANAGER) {
+    // Strict Data Isolation: Non-privileged roles (Employee, Manager, Recruiter) can ONLY view their own payslips
+    if (isPayrollPrivileged(req.user.role)) {
+      if (employeeId) {
+        if (!isValidObjectId(employeeId)) {
+          return sendError(res, 'Invalid employee ID format.', [], 400);
+        }
+        query.employeeId = employeeId;
+      }
+    } else {
       if (!req.verifiedEmployeeId) {
         return sendError(res, 'Access denied: No employee profile is linked to your user account.', [], 403);
       }
@@ -302,36 +362,26 @@ export const getPayslips = async (req, res, next) => {
         return sendError(res, 'Access denied: You cannot view payslips belonging to another employee.', [], 403);
       }
       query.employeeId = req.verifiedEmployeeId;
-    } else if (req.user.role === ROLES.ADMIN || req.user.role === ROLES.HR_MANAGER || req.user.role === ROLES.PAYROLL_ADMIN) {
-      if (employeeId) {
-        query.employeeId = employeeId;
-      }
-    } else {
-      if (req.verifiedEmployeeId) {
-        query.employeeId = req.verifiedEmployeeId;
-      } else {
-        return sendError(res, 'Access denied: Insufficient permissions to view payroll records.', [], 403);
-      }
     }
 
     if (month) query.month = parseInt(month, 10);
     if (year) query.year = parseInt(year, 10);
 
-    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    const total = await Payslip.countDocuments(query);
-    const payslips = await Payslip.find(query)
-      .sort({ year: -1, month: -1 })
-      .skip(skip)
-      .limit(parseInt(limit, 10))
-      .populate('employeeId', 'firstName lastName employeeId departmentId designationId');
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 200 });
+
+    const [payslips, total] = await Promise.all([
+      Payslip.find(query)
+        .sort({ year: -1, month: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('employeeId', 'firstName lastName employeeId departmentId designationId')
+        .lean(),
+      Payslip.countDocuments(query),
+    ]);
 
     return sendSuccess(res, 'Payslips retrieved.', {
       payslips,
-      pagination: {
-        total,
-        page: parseInt(page, 10),
-        pages: Math.ceil(total / parseInt(limit, 10)),
-      },
+      pagination: buildPaginationMeta(total, page, limit),
     });
   } catch (error) {
     next(error);
@@ -344,17 +394,17 @@ export const getPayslips = async (req, res, next) => {
 export const downloadPayslipPDF = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid payslip ID format.', [], 400);
+    }
 
-    const payslip = await Payslip.findById(id);
+    const payslip = await Payslip.findById(id).lean();
     if (!payslip) {
       return sendError(res, 'Payslip not found.', [], 404);
     }
 
-    // Role verification: Non-payroll admins can only download their own payslip
-    const isPrivileged =
-      req.user.role === ROLES.ADMIN ||
-      req.user.role === ROLES.HR_MANAGER ||
-      req.user.role === ROLES.PAYROLL_ADMIN;
+    // Role verification: Non-payroll privileged roles can only download their own payslip
+    const isPrivileged = isPayrollPrivileged(req.user.role);
 
     if (!isPrivileged) {
       if (!req.verifiedEmployeeId || payslip.employeeId.toString() !== req.verifiedEmployeeId.toString()) {
@@ -362,12 +412,14 @@ export const downloadPayslipPDF = async (req, res, next) => {
       }
     }
 
-    const employee = await Employee.findById(payslip.employeeId)
-      .populate('departmentId')
-      .populate('designationId')
-      .populate('branchId');
-
-    const company = await CompanySettings.findOne();
+    const [employee, company] = await Promise.all([
+      Employee.findById(payslip.employeeId)
+        .populate('departmentId')
+        .populate('designationId')
+        .populate('branchId')
+        .lean(),
+      CompanySettings.findOne().lean(),
+    ]);
 
     const pdfBuffer = await generatePayslipPDF({ payslip, employee, company });
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { downloadAuthenticatedFile } from '../../services/api';
 import { useSelector } from 'react-redux';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
@@ -29,19 +30,22 @@ export default function PayrollPage() {
   const isAdminOrHR = user?.role === 'ADMIN' || user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER' || user?.role === 'PAYROLL_ADMIN';
 
   useEffect(() => {
-    fetchPayrollData();
+    const controller = new AbortController();
+    fetchPayrollData(controller.signal);
+    return () => controller.abort();
   }, []);
 
-  const fetchPayrollData = async () => {
+  const fetchPayrollData = async (signal = null) => {
     try {
       setLoading(true);
       const [runsRes, payslipsRes] = await Promise.all([
-        isAdminOrHR ? api.get('/payroll/runs') : Promise.resolve({ data: { runs: [] } }),
-        api.get('/payroll/payslips'),
+        isAdminOrHR ? api.get('/payroll/runs', { signal, cacheTtl: 10000 }) : Promise.resolve({ data: { runs: [] } }),
+        api.get('/payroll/payslips', { signal, cacheTtl: 10000 }),
       ]);
-      setRuns(runsRes.data.runs || []);
-      setPayslips(payslipsRes.data.payslips || []);
+      setRuns(runsRes.data?.runs || runsRes.runs || []);
+      setPayslips(payslipsRes.data?.payslips || payslipsRes.payslips || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load payroll data');
     } finally {
       setLoading(false);
@@ -79,27 +83,8 @@ export default function PayrollPage() {
   const handleDownloadPDF = async (payslipId, payslipNumber) => {
     try {
       toast.loading('Generating PDF payslip...', { id: 'pdf' });
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/payroll/payslips/${payslipId}/pdf`,
-        {
-          headers: {
-            Authorization: `Bearer ${sessionStorage.getItem('pr_access_token')}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to download PDF');
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${payslipNumber}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      const url = `/payroll/payslips/${payslipId}/pdf`;
+      await downloadAuthenticatedFile(url, `${payslipNumber || 'Payslip'}.pdf`);
       toast.success('Payslip downloaded!', { id: 'pdf' });
     } catch (err) {
       toast.error(err.message || 'Failed to download PDF', { id: 'pdf' });

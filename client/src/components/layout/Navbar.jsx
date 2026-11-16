@@ -16,17 +16,42 @@ export default function Navbar({ onMenuToggle, title }) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   useEffect(() => {
-    fetchNotifications();
-    const onMutated = () => fetchNotifications();
+    let isMounted = true;
+
+    const loadNotifications = async () => {
+      try {
+        const res = await api.get('/notifications', { cacheTtl: 15000 });
+        if (isMounted) {
+          setNotifications(res.data?.notifications || res.notifications || []);
+          setUnreadCount(res.data?.unreadCount || res.unreadCount || 0);
+        }
+      } catch (err) {
+        // Non-blocking
+      }
+    };
+
+    loadNotifications();
+
+    const onMutated = (e) => {
+      const tags = e?.detail?.affectedTags || [];
+      const moduleTag = e?.detail?.moduleTag;
+      if (tags.includes('notifications') || moduleTag === 'notifications') {
+        loadNotifications();
+      }
+    };
+
     window.addEventListener('hrms:data-mutated', onMutated);
-    return () => window.removeEventListener('hrms:data-mutated', onMutated);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('hrms:data-mutated', onMutated);
+    };
   }, []);
 
   const fetchNotifications = async () => {
     try {
-      const res = await api.get('/notifications');
-      setNotifications(res.data.notifications || []);
-      setUnreadCount(res.data.unreadCount || 0);
+      const res = await api.get('/notifications', { cacheTtl: 15000, skipDedupe: true });
+      setNotifications(res.data?.notifications || res.notifications || []);
+      setUnreadCount(res.data?.unreadCount || res.unreadCount || 0);
     } catch (err) {
       // Non-blocking
     }

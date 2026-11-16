@@ -40,17 +40,20 @@ export default function AttendancePage() {
   }, []);
 
   useEffect(() => {
-    fetchAttendance(attendance.length === 0);
+    const controller = new AbortController();
+    fetchAttendance(attendance.length === 0, controller.signal);
+    return () => controller.abort();
   }, [statusFilter]);
 
-  const fetchAttendance = async (showSkeleton = false) => {
+  const fetchAttendance = async (showSkeleton = false, signal = null) => {
     try {
       if (showSkeleton) setLoading(true);
       const params = {};
       if (statusFilter) params.status = statusFilter;
-      const res = await api.get('/attendance', { params });
+      const res = await api.get('/attendance', { params, signal, cacheTtl: 10000 });
       setAttendance(res.data?.attendance || res.attendance || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load attendance records');
     } finally {
       setLoading(false);

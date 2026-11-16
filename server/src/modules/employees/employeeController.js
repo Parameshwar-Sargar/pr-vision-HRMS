@@ -1,11 +1,24 @@
 import { z } from 'zod';
 import Employee from '../../models/Employee.js';
 import User from '../../models/User.js';
+import Department from '../../models/Department.js';
+import Designation from '../../models/Designation.js';
+import Branch from '../../models/Branch.js';
+import Shift from '../../models/Shift.js';
 import LeaveType from '../../models/LeaveType.js';
 import LeaveBalance from '../../models/LeaveBalance.js';
 import SalaryStructure from '../../models/SalaryStructure.js';
 import { ROLES, LIFECYCLE_STAGES } from '../../config/constants.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
+import {
+  isAdminRole,
+  isAdminOrHR,
+  isPayrollPrivileged,
+  isValidObjectId,
+  escapeRegex,
+  sanitizeUserForResponse,
+} from '../../utils/securityUtils.js';
+import UserSession from '../../models/UserSession.js';
 import { logAudit } from '../../middleware/auditMiddleware.js';
 import { invalidateAuthCache } from '../../middleware/authMiddleware.js';
 
@@ -51,39 +64,85 @@ const employeeCreateSchema = z.object({
     .optional(),
   createUserAccount: z.boolean().default(true),
   password: z.string().min(6).optional().default('Welcome@123'),
-  role: z.enum([ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.MANAGER, ROLES.EMPLOYEE, ROLES.RECRUITER, ROLES.PAYROLL_ADMIN]).default(ROLES.EMPLOYEE),
+  role: z
+    .enum([
+      ROLES.SUPER_ADMIN,
+      ROLES.ADMIN,
+      ROLES.HR_MANAGER,
+      ROLES.MANAGER,
+      ROLES.EMPLOYEE,
+      ROLES.RECRUITER,
+      ROLES.PAYROLL_ADMIN,
+    ])
+    .default(ROLES.EMPLOYEE),
 });
+
+const selfProfileUpdateSchema = z.object({
+  phone: z.string().max(30).optional(),
+  address: z
+    .object({
+      street: z.string().max(200).optional(),
+      city: z.string().max(100).optional(),
+      state: z.string().max(100).optional(),
+      postalCode: z.string().max(20).optional(),
+      country: z.string().max(100).optional(),
+    })
+    .optional(),
+  emergencyContact: z
+    .object({
+      name: z.string().max(120).optional(),
+      relationship: z.string().max(80).optional(),
+      phone: z.string().max(30).optional(),
+    })
+    .optional(),
+});
+
+const ensureCanManageTargetEmployee = async (req, employee) => {
+  if (!employee?.userId || isAdminRole(req.user.role)) {
+    return true;
+  }
+  const targetUser = await User.findById(employee.userId).select('role').lean();
+  if (targetUser && isAdminRole(targetUser.role)) {
+    return false;
+  }
+  return true;
+};
 
 export const getEmployees = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, search = '', departmentId, branchId, status } = req.query;
+    const { search = '', departmentId, branchId, status } = req.query;
 
-    // RBAC: Employees cannot view organization-wide employee directory
-    if (req.user.role === ROLES.EMPLOYEE) {
+    // RBAC: Employees and Recruiters cannot view the organization-wide employee directory
+    if (req.user.role === ROLES.EMPLOYEE || req.user.role === ROLES.RECRUITER) {
       return sendError(
         res,
-        'Access denied: Employees cannot view the organization-wide employee directory.',
+        'Access denied: Your role does not permit viewing the organization-wide employee directory.',
         [],
         403
       );
     }
 
     const query = { isDeleted: false };
+    let projection = '-bankDetails -previousEmployment -exitInterviewNotes';
 
-    // Managers can only view their direct reporting team
+    // Managers can only view their direct reporting team with restricted PII fields
     if (req.user.role === ROLES.MANAGER) {
       if (!req.verifiedEmployeeId) {
         return sendError(res, 'Access denied: No manager employee profile found.', [], 403);
       }
       query.managerId = req.verifiedEmployeeId;
+      projection = '-bankDetails -previousEmployment -exitInterviewNotes -address -emergencyContact -dateOfBirth';
+    } else if (!isPayrollPrivileged(req.user.role)) {
+      return sendError(res, 'Access denied: Insufficient permissions to view employee directory.', [], 403);
     }
 
     if (search) {
+      const safeSearch = escapeRegex(String(search).trim());
       query.$or = [
-        { firstName: { $regex: search, $options: 'i' } },
-        { lastName: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { employeeId: { $regex: search, $options: 'i' } },
+        { firstName: { $regex: safeSearch, $options: 'i' } },
+        { lastName: { $regex: safeSearch, $options: 'i' } },
+        { email: { $regex: safeSearch, $options: 'i' } },
+        { employeeId: { $regex: safeSearch, $options: 'i' } },
       ];
     }
 
@@ -91,13 +150,15 @@ export const getEmployees = async (req, res, next) => {
     if (branchId) query.branchId = branchId;
     if (status) query.employmentStatus = status;
 
-    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 200 });
+
     const [total, employees] = await Promise.all([
       Employee.countDocuments(query),
       Employee.find(query)
+        .select(projection)
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(parseInt(limit, 10))
+        .limit(limit)
         .populate('departmentId', 'name code')
         .populate('designationId', 'title code')
         .populate('branchId', 'name code city')
@@ -109,12 +170,7 @@ export const getEmployees = async (req, res, next) => {
 
     return sendSuccess(res, 'Employees retrieved successfully.', {
       employees,
-      pagination: {
-        total,
-        page: parseInt(page, 10),
-        pages: Math.ceil(total / parseInt(limit, 10)),
-        limit: parseInt(limit, 10),
-      },
+      pagination: buildPaginationMeta(total, page, limit),
     });
   } catch (error) {
     next(error);
@@ -124,58 +180,73 @@ export const getEmployees = async (req, res, next) => {
 export const getEmployeeById = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid employee ID format.', [], 400);
+    }
 
-    // RBAC: An employee can ONLY view their own employee profile
-    if (req.user.role === ROLES.EMPLOYEE) {
+    // RBAC: An employee or recruiter can ONLY view their own employee profile
+    if (req.user.role === ROLES.EMPLOYEE || req.user.role === ROLES.RECRUITER) {
       if (!req.verifiedEmployeeId || id.toString() !== req.verifiedEmployeeId.toString()) {
         return sendError(res, 'Access denied: You cannot view another employee profile.', [], 403);
       }
     }
 
-    const employee = await Employee.findOne({ _id: id, isDeleted: false })
-      .populate('departmentId')
-      .populate('designationId')
-      .populate('branchId')
-      .populate('managerId', 'firstName lastName employeeId email')
-      .populate('shiftId')
-      .populate('userId', 'role isActive lastLoginAt permissions');
-
-    if (!employee) {
-      return sendError(res, 'Employee not found.', [], 404);
-    }
-
-    // Managers can only view self or direct reports
-    if (req.user.role === ROLES.MANAGER) {
-      const isSelf = req.verifiedEmployeeId && employee._id.toString() === req.verifiedEmployeeId.toString();
-      const isDirectReport = req.verifiedEmployeeId && employee.managerId?._id?.toString() === req.verifiedEmployeeId.toString();
-      if (!isSelf && !isDirectReport) {
-        return sendError(res, 'Access denied: You can only view profiles for your direct reporting team.', [], 403);
-      }
-    }
-
     const currentYear = new Date().getFullYear();
+    const isSelf = !!(req.verifiedEmployeeId && id.toString() === req.verifiedEmployeeId.toString());
 
-    // Salary Structure: Only visible to HR_MANAGER, ADMIN, PAYROLL_ADMIN, or employee themselves
-    const canViewSalary =
-      req.user.role === ROLES.ADMIN ||
-      req.user.role === ROLES.HR_MANAGER ||
-      req.user.role === ROLES.PAYROLL_ADMIN ||
-      (req.verifiedEmployeeId && employee._id.toString() === req.verifiedEmployeeId.toString());
+    // Sensitive Finance (Salary Structure & Bank Details): Only visible to ADMIN, SUPER_ADMIN, HR_MANAGER, PAYROLL_ADMIN, or employee themselves
+    const canViewSalary = isPayrollPrivileged(req.user.role) || isSelf;
 
-    const [leaveBalances, salary] = await Promise.all([
+    const [employee, leaveBalances, salary] = await Promise.all([
+      Employee.findOne({ _id: id, isDeleted: false })
+        .populate('departmentId')
+        .populate('designationId')
+        .populate('branchId')
+        .populate('managerId', 'firstName lastName employeeId email')
+        .populate('shiftId')
+        .populate('userId', 'role isActive lastLoginAt permissions')
+        .lean(),
       LeaveBalance.findOne({
-        employeeId: employee._id,
+        employeeId: id,
         year: currentYear,
       })
         .populate('balances.leaveTypeId')
         .lean(),
       canViewSalary
         ? SalaryStructure.findOne({
-            employeeId: employee._id,
+            employeeId: id,
             isActive: true,
           }).lean()
         : Promise.resolve(null),
     ]);
+
+    if (!employee) {
+      return sendError(res, 'Employee not found.', [], 404);
+    }
+
+    // Managers can only view self or direct reports, and cannot view reports' sensitive personal/finance details
+    if (req.user.role === ROLES.MANAGER) {
+      const isDirectReport =
+        req.verifiedEmployeeId &&
+        employee.managerId?._id?.toString() === req.verifiedEmployeeId.toString();
+      if (!isSelf && !isDirectReport) {
+        return sendError(res, 'Access denied: You can only view profiles for your direct reporting team.', [], 403);
+      }
+      if (!isSelf) {
+        delete employee.bankDetails;
+        delete employee.previousEmployment;
+        delete employee.exitInterviewNotes;
+        delete employee.address;
+        delete employee.emergencyContact;
+        if (employee.userId && typeof employee.userId === 'object') {
+          delete employee.userId.permissions;
+        }
+      }
+    } else if (!canViewSalary) {
+      delete employee.bankDetails;
+      delete employee.previousEmployment;
+      delete employee.exitInterviewNotes;
+    }
 
     return sendSuccess(res, 'Employee profile retrieved.', {
       employee,
@@ -247,11 +318,14 @@ export const updateMyProfile = async (req, res, next) => {
       return sendError(res, 'Employee record not found.', [], 404);
     }
 
+    const validated = selfProfileUpdateSchema.parse(req.body);
+
     // Only allow self-service contact field updates
-    const { phone, address, emergencyContact } = req.body;
-    if (phone !== undefined) employee.phone = phone;
-    if (address !== undefined) employee.address = address;
-    if (emergencyContact !== undefined) employee.emergencyContact = emergencyContact;
+    if (validated.phone !== undefined) employee.phone = validated.phone;
+    if (validated.address !== undefined) employee.address = { ...employee.address, ...validated.address };
+    if (validated.emergencyContact !== undefined) {
+      employee.emergencyContact = { ...employee.emergencyContact, ...validated.emergencyContact };
+    }
 
     await employee.save();
 
@@ -260,7 +334,7 @@ export const updateMyProfile = async (req, res, next) => {
       action: 'EMPLOYEE_SELF_UPDATE',
       entity: 'Employee',
       entityId: employee._id,
-      details: { phone, address, emergencyContact },
+      details: { updatedFields: Object.keys(validated) },
     });
 
     return sendSuccess(res, 'Profile updated successfully.', { employee });
@@ -271,8 +345,37 @@ export const updateMyProfile = async (req, res, next) => {
 
 export const createEmployee = async (req, res, next) => {
   try {
+    // Privilege Escalation Prevention: Block non-Admin attempts to create ADMIN / SUPER_ADMIN accounts upfront
+    const rawTargetRole = String(req.body?.role || '').toUpperCase().trim();
+    if (
+      (rawTargetRole === ROLES.ADMIN || rawTargetRole === ROLES.SUPER_ADMIN) &&
+      !isAdminRole(req.user.role)
+    ) {
+      return sendError(
+        res,
+        'Access denied: HR_MANAGER cannot register or promote a user to ADMIN or SUPER_ADMIN.',
+        [],
+        403
+      );
+    }
+
     const validated = employeeCreateSchema.parse(req.body);
     const normalizedEmail = validated.email.toLowerCase();
+
+    // Privilege Escalation Prevention: Only ADMIN or SUPER_ADMIN can create an ADMIN / SUPER_ADMIN user
+    if (validated.createUserAccount) {
+      const targetRole = String(validated.role || '').toUpperCase();
+      const isTargetAdmin = targetRole === ROLES.ADMIN || targetRole === ROLES.SUPER_ADMIN;
+
+      if (isTargetAdmin && !isAdminRole(req.user.role)) {
+        return sendError(
+          res,
+          'Access denied: HR_MANAGER cannot register or promote a user to ADMIN or SUPER_ADMIN.',
+          [],
+          403
+        );
+      }
+    }
 
     const [duplicateEmail, lastEmployee, existingUser, leaveTypes] = await Promise.all([
       Employee.findOne({ email: normalizedEmail, isDeleted: false }).select('_id').lean(),
@@ -285,6 +388,10 @@ export const createEmployee = async (req, res, next) => {
 
     if (duplicateEmail) {
       return sendError(res, 'An employee with this email address already exists.', [], 409);
+    }
+
+    if (validated.createUserAccount && existingUser) {
+      return sendError(res, 'A user login account with this email address already exists.', [], 409);
     }
 
     // Auto-generate sequential Employee ID (EMP-001)
@@ -382,7 +489,12 @@ export const createEmployee = async (req, res, next) => {
       details: { employeeId: employee.employeeId, email: employee.email },
     });
 
-    return sendSuccess(res, 'Employee added successfully.', { employee: populatedEmployee, user: createdUser }, 201);
+    return sendSuccess(
+      res,
+      'Employee added successfully.',
+      { employee: populatedEmployee, user: sanitizeUserForResponse(createdUser) },
+      201
+    );
   } catch (error) {
     next(error);
   }
@@ -395,6 +507,15 @@ export const updateEmployee = async (req, res, next) => {
 
     if (!employee) {
       return sendError(res, 'Employee not found.', [], 404);
+    }
+
+    if (!(await ensureCanManageTargetEmployee(req, employee))) {
+      return sendError(
+        res,
+        'Access denied: Only ADMIN or SUPER_ADMIN can modify an ADMIN or SUPER_ADMIN account.',
+        [],
+        403
+      );
     }
 
     const updatableFields = [
@@ -532,6 +653,15 @@ export const processResignation = async (req, res, next) => {
     const employee = await Employee.findById(id);
     if (!employee) return sendError(res, 'Employee not found.', [], 404);
 
+    if (!(await ensureCanManageTargetEmployee(req, employee))) {
+      return sendError(
+        res,
+        'Access denied: Non-admin roles cannot initiate exit or deactivation workflows for an ADMIN/SUPER_ADMIN.',
+        [],
+        403
+      );
+    }
+
     employee.employmentStatus = LIFECYCLE_STAGES.RESIGNED;
     if (resignationDate) employee.resignationDate = new Date(resignationDate);
     if (lastWorkingDate) employee.lastWorkingDate = new Date(lastWorkingDate);
@@ -561,6 +691,15 @@ export const issueRelievingLetter = async (req, res, next) => {
     const employee = await Employee.findById(id);
     if (!employee) return sendError(res, 'Employee not found.', [], 404);
 
+    if (!(await ensureCanManageTargetEmployee(req, employee))) {
+      return sendError(
+        res,
+        'Access denied: Non-admin roles cannot relieve an ADMIN/SUPER_ADMIN account.',
+        [],
+        403
+      );
+    }
+
     employee.relievingLetterIssued = true;
     employee.experienceLetterIssued = true;
     employee.employmentStatus = LIFECYCLE_STAGES.RELIEVED;
@@ -589,12 +728,34 @@ export const deleteEmployee = async (req, res, next) => {
     const employee = await Employee.findById(id);
     if (!employee) return sendError(res, 'Employee not found.', [], 404);
 
+    if (!(await ensureCanManageTargetEmployee(req, employee))) {
+      return sendError(
+        res,
+        'Access denied: Only ADMIN or SUPER_ADMIN can deactivate an ADMIN or SUPER_ADMIN account.',
+        [],
+        403
+      );
+    }
+
     employee.isDeleted = true;
     employee.employmentStatus = LIFECYCLE_STAGES.TERMINATED;
     await employee.save();
 
     if (employee.userId) {
-      await User.findByIdAndUpdate(employee.userId, { isActive: false });
+      await Promise.all([
+        User.findByIdAndUpdate(employee.userId, { isActive: false }),
+        UserSession.updateMany(
+          { userId: employee.userId, isRevoked: false },
+          {
+            $set: {
+              isRevoked: true,
+              revokedAt: new Date(),
+              revokedReason: 'Employee account deactivated',
+            },
+          }
+        ),
+      ]);
+      invalidateAuthCache(employee.userId);
     }
 
     await logAudit({

@@ -10,6 +10,7 @@ import ExpenseClaim from '../../models/ExpenseClaim.js';
 import AuditLog from '../../models/AuditLog.js';
 import Announcement from '../../models/Announcement.js';
 import { ROLES, ATTENDANCE_STATUS, LEAVE_STATUS, LIFECYCLE_STAGES } from '../../config/constants.js';
+import { isAdminOrHR, isPayrollPrivileged, sanitizeAuditDetails } from '../../utils/securityUtils.js';
 import { sendSuccess } from '../../utils/responseUtils.js';
 
 export const getDashboardStats = async (req, res, next) => {
@@ -20,13 +21,13 @@ export const getDashboardStats = async (req, res, next) => {
     const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0);
     const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59);
 
-    // 1. ADMIN, HR_MANAGER, PAYROLL_ADMIN, RECRUITER Executive Metrics
-    if (
-      user.role === ROLES.ADMIN ||
-      user.role === ROLES.HR_MANAGER ||
-      user.role === ROLES.PAYROLL_ADMIN ||
-      user.role === ROLES.RECRUITER
-    ) {
+    const privilegedAdminHR = isAdminOrHR(user.role);
+    const canViewPayroll = isPayrollPrivileged(user.role);
+    const isRecruiter = user.role === ROLES.RECRUITER;
+    const isPayrollOnly = user.role === ROLES.PAYROLL_ADMIN;
+
+    // 1. ADMIN, SUPER_ADMIN, HR_MANAGER, PAYROLL_ADMIN, RECRUITER Executive Metrics (strictly scoped by role)
+    if (privilegedAdminHR || isPayrollOnly || isRecruiter) {
       const thirtyDaysAgo = new Date(today);
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -39,43 +40,85 @@ export const getDashboardStats = async (req, res, next) => {
         LIFECYCLE_STAGES.RELIEVED,
       ];
 
-      // Consolidated parallel queries (reduces 17 roundtrips to 2 fast batches over warm sockets)
+      const empSelect = privilegedAdminHR
+        ? 'firstName lastName employeeId joiningDate employmentStatus dateOfBirth departmentId'
+        : 'joiningDate employmentStatus departmentId';
+
       const [
-        allEmployees,
+        rawEmployees,
+        departments,
         recentAttendance,
-        activeLeaves,
+        leaveStatsAgg,
         pendingExpenses,
-        openJobCount,
       ] = await Promise.all([
         Employee.find({ isDeleted: false })
-          .select('firstName lastName employeeId joiningDate employmentStatus dateOfBirth departmentId')
-          .populate('departmentId', 'name')
+          .select(empSelect)
           .lean(),
-        Attendance.find({
-          date: { $gte: sevenDaysAgo, $lte: endOfToday },
-        })
-          .select('employeeId date status checkInTime checkOutTime')
+        Department.find({ isDeleted: false })
+          .select('_id name')
           .lean(),
-        LeaveRequest.find({
-          status: { $in: [LEAVE_STATUS.PENDING, LEAVE_STATUS.APPROVED] },
-        })
-          .select('status startDate endDate')
-          .lean(),
-        ExpenseClaim.countDocuments({ status: 'Pending' }),
-        JobOpening.countDocuments({ status: 'Open' }),
+        !isRecruiter
+          ? Attendance.find({
+              date: { $gte: sevenDaysAgo, $lte: endOfToday },
+            })
+              .select('employeeId date status checkInTime checkOutTime')
+              .lean()
+          : myEmpId
+          ? Attendance.find({
+              employeeId: myEmpId,
+              date: { $gte: startOfToday, $lte: endOfToday },
+            })
+              .select('employeeId date status checkInTime checkOutTime')
+              .lean()
+          : [],
+        privilegedAdminHR
+          ? LeaveRequest.aggregate([
+              {
+                $match: {
+                  $or: [
+                    { status: LEAVE_STATUS.PENDING },
+                    {
+                      status: LEAVE_STATUS.APPROVED,
+                      startDate: { $lte: endOfToday },
+                      endDate: { $gte: startOfToday },
+                    },
+                  ],
+                },
+              },
+              {
+                $group: {
+                  _id: '$status',
+                  count: { $sum: 1 },
+                },
+              },
+            ])
+          : [],
+        privilegedAdminHR ? ExpenseClaim.countDocuments({ status: 'Pending' }) : 0,
       ]);
 
       const [
+        openJobCount,
         activeCandidates,
         latestPayroll,
         upcomingHolidays,
         announcements,
         recentActivities,
       ] = await Promise.all([
-        Candidate.countDocuments({
-          status: { $in: ['Applied', 'Screening', 'Interviewing', 'Offered'] },
-        }),
-        PayrollRun.findOne().sort({ year: -1, month: -1 }).lean(),
+        privilegedAdminHR || isRecruiter ? JobOpening.countDocuments({ status: 'Open' }) : 0,
+        privilegedAdminHR || isRecruiter
+          ? Candidate.countDocuments({
+              $or: [
+                { status: { $in: ['Applied', 'Screening', 'Interviewing', 'Offered'] } },
+                { stage: { $in: ['Applied', 'Screening', 'Interview', 'Technical', 'HR Round', 'Offered'] } },
+              ],
+            })
+          : 0,
+        canViewPayroll
+          ? PayrollRun.findOne()
+              .sort({ year: -1, month: -1 })
+              .select('month year totalNetSalary status')
+              .lean()
+          : null,
         Holiday.find({ date: { $gte: startOfToday } })
           .sort({ date: 1 })
           .limit(4)
@@ -85,20 +128,29 @@ export const getDashboardStats = async (req, res, next) => {
           .limit(4)
           .populate('publishedBy', 'name')
           .lean(),
-        AuditLog.find()
-          .sort({ createdAt: -1 })
-          .limit(6)
-          .lean(),
+        privilegedAdminHR
+          ? AuditLog.find()
+              .sort({ createdAt: -1 })
+              .limit(6)
+              .lean()
+          : [],
       ]);
 
-      const totalEmployees = allEmployees.length;
+      const deptById = new Map(departments.map((d) => [d._id.toString(), d]));
+
+      const totalEmployees = rawEmployees.length;
       let activeEmployees = 0;
       let newJoiners = 0;
       let resignedEmployees = 0;
       const deptMap = new Map();
       const upcomingBirthdays = [];
 
-      for (const emp of allEmployees) {
+      for (const emp of rawEmployees) {
+        const populatedDept = emp.departmentId
+          ? deptById.get(emp.departmentId.toString()) || null
+          : null;
+        emp.departmentId = populatedDept;
+
         if (inactiveStages.includes(emp.employmentStatus)) {
           resignedEmployees++;
         } else {
@@ -107,7 +159,7 @@ export const getDashboardStats = async (req, res, next) => {
         if (emp.joiningDate && new Date(emp.joiningDate) >= thirtyDaysAgo) {
           newJoiners++;
         }
-        const deptName = emp.departmentId?.name || 'General';
+        const deptName = populatedDept?.name || 'General';
         deptMap.set(deptName, (deptMap.get(deptName) || 0) + 1);
         if (emp.dateOfBirth && upcomingBirthdays.length < 5) {
           upcomingBirthdays.push(emp);
@@ -143,15 +195,11 @@ export const getDashboardStats = async (req, res, next) => {
 
       let pendingLeaves = 0;
       let onLeaveToday = 0;
-      for (const lv of activeLeaves) {
-        if (lv.status === LEAVE_STATUS.PENDING) {
-          pendingLeaves++;
-        } else if (
-          lv.status === LEAVE_STATUS.APPROVED &&
-          new Date(lv.startDate) <= endOfToday &&
-          new Date(lv.endDate) >= startOfToday
-        ) {
-          onLeaveToday++;
+      for (const item of leaveStatsAgg) {
+        if (item._id === LEAVE_STATUS.PENDING) {
+          pendingLeaves = item.count;
+        } else if (item._id === LEAVE_STATUS.APPROVED) {
+          onLeaveToday = item.count;
         }
       }
 
@@ -176,15 +224,15 @@ export const getDashboardStats = async (req, res, next) => {
           totalEmployees,
           activeEmployees,
           newJoiners,
-          resignedEmployees,
-          presentToday,
-          lateToday,
-          absentToday,
-          onLeaveToday,
-          attendancePercentage,
-          pendingLeaves,
-          pendingExpenses,
-          pendingApprovals,
+          resignedEmployees: isRecruiter ? 0 : resignedEmployees,
+          presentToday: isRecruiter ? 0 : presentToday,
+          lateToday: isRecruiter ? 0 : lateToday,
+          absentToday: isRecruiter ? 0 : absentToday,
+          onLeaveToday: privilegedAdminHR ? onLeaveToday : 0,
+          attendancePercentage: isRecruiter ? 0 : attendancePercentage,
+          pendingLeaves: privilegedAdminHR ? pendingLeaves : 0,
+          pendingExpenses: privilegedAdminHR ? pendingExpenses : 0,
+          pendingApprovals: privilegedAdminHR ? pendingApprovals : 0,
           openJobCount,
           activeCandidates,
           checkedIn: !!myTodayRecord?.checkInTime,
@@ -193,8 +241,7 @@ export const getDashboardStats = async (req, res, next) => {
           checkOutTime: myTodayRecord?.checkOutTime || null,
           statusToday: myTodayRecord?.status || 'Not Checked In',
           latestPayroll:
-            latestPayroll &&
-            (user.role === ROLES.ADMIN || user.role === ROLES.HR_MANAGER || user.role === ROLES.PAYROLL_ADMIN)
+            latestPayroll && canViewPayroll
               ? {
                   month: latestPayroll.month,
                   year: latestPayroll.year,
@@ -204,46 +251,54 @@ export const getDashboardStats = async (req, res, next) => {
               : null,
         },
         departmentDistribution,
-        attendanceTrends,
+        attendanceTrends: isRecruiter ? [] : attendanceTrends,
         upcomingHolidays,
-        upcomingBirthdays,
-        announcements,
-        recentActivities,
+        upcomingBirthdays: privilegedAdminHR ? upcomingBirthdays : [],
+        announcements: announcements.map((a) => ({ ...a, content: a.content ?? a.message })),
+        recentActivities: privilegedAdminHR
+          ? recentActivities.map((act) => ({
+              ...act,
+              details: sanitizeAuditDetails(act.details),
+            }))
+          : [],
       });
     }
 
     // 2. MANAGER Dashboard View
     if (user.role === ROLES.MANAGER) {
       const managerId = myEmpId;
-      const teamEmployees = managerId
-        ? await Employee.find({ managerId, isDeleted: false }).select('_id firstName lastName').lean()
-        : [];
+      const [teamEmployees, myTodayRecord, upcomingHolidays, announcements] = await Promise.all([
+        managerId
+          ? Employee.find({ managerId, isDeleted: false }).select('_id firstName lastName').lean()
+          : [],
+        managerId
+          ? Attendance.findOne({
+              employeeId: managerId,
+              date: { $gte: startOfToday, $lte: endOfToday },
+            })
+              .select('status checkInTime checkOutTime')
+              .lean()
+          : null,
+        Holiday.find({ date: { $gte: startOfToday } }).sort({ date: 1 }).limit(4).lean(),
+        Announcement.find().sort({ createdAt: -1 }).limit(4).lean(),
+      ]);
+
       const teamIds = teamEmployees.map((e) => e._id);
 
-      const [teamPresentToday, teamPendingLeaves, myTodayRecord, upcomingHolidays, announcements] =
-        await Promise.all([
-          teamIds.length > 0
-            ? Attendance.countDocuments({
+      const [teamPresentToday, teamPendingLeaves] =
+        teamIds.length > 0
+          ? await Promise.all([
+              Attendance.countDocuments({
                 employeeId: { $in: teamIds },
                 date: { $gte: startOfToday, $lte: endOfToday },
                 status: { $in: [ATTENDANCE_STATUS.PRESENT, ATTENDANCE_STATUS.LATE] },
-              })
-            : 0,
-          teamIds.length > 0
-            ? LeaveRequest.countDocuments({
+              }),
+              LeaveRequest.countDocuments({
                 employeeId: { $in: teamIds },
                 status: LEAVE_STATUS.PENDING,
-              })
-            : 0,
-          managerId
-            ? Attendance.findOne({
-                employeeId: managerId,
-                date: { $gte: startOfToday, $lte: endOfToday },
-              }).lean()
-            : null,
-          Holiday.find({ date: { $gte: startOfToday } }).sort({ date: 1 }).limit(4).lean(),
-          Announcement.find().sort({ createdAt: -1 }).limit(4).lean(),
-        ]);
+              }),
+            ])
+          : [0, 0];
 
       return sendSuccess(res, 'Manager team dashboard loaded.', {
         role: user.role,
@@ -258,7 +313,7 @@ export const getDashboardStats = async (req, res, next) => {
           statusToday: myTodayRecord?.status || 'Not Checked In',
         },
         upcomingHolidays,
-        announcements,
+        announcements: announcements.map((a) => ({ ...a, content: a.content ?? a.message })),
       });
     }
 
@@ -271,7 +326,9 @@ export const getDashboardStats = async (req, res, next) => {
           ? Attendance.findOne({
               employeeId: myEmpId,
               date: { $gte: startOfToday, $lte: endOfToday },
-            }).lean()
+            })
+              .select('status checkInTime checkOutTime')
+              .lean()
           : null,
         myEmpId
           ? Attendance.countDocuments({
@@ -302,7 +359,7 @@ export const getDashboardStats = async (req, res, next) => {
         pendingLeaves,
       },
       upcomingHolidays,
-      announcements,
+      announcements: announcements.map((a) => ({ ...a, content: a.content ?? a.message })),
     });
   } catch (error) {
     next(error);

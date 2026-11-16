@@ -38,25 +38,100 @@ import {
   Legend,
 } from 'recharts';
 
+const LiveGreeting = React.memo(function LiveGreeting({ userName }) {
+  const [hour, setHour] = useState(() => new Date().getHours());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const nextHour = new Date().getHours();
+      setHour((prev) => (prev === nextHour ? prev : nextHour));
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const period = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+  return (
+    <h1 className="text-xl sm:text-2xl font-black tracking-tight">
+      Good {period}, {userName}!
+    </h1>
+  );
+});
+
+const LiveClockDisplay = React.memo(function LiveClockDisplay() {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="px-3.5 py-2 rounded-xl bg-black/20 backdrop-blur-md border border-white/10 text-right">
+      <div className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider">
+        {now.toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })}
+      </div>
+      <div className="font-mono text-base font-bold text-white tracking-wider">
+        {now.toLocaleTimeString()}
+      </div>
+    </div>
+  );
+});
+
 export default function DashboardPage() {
   const { user } = useSelector((state) => state.auth);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [clockLoading, setClockLoading] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date());
-
-  // Live ticking clock
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
-    fetchDashboardStats(true);
-    const onMutated = () => fetchDashboardStats(false);
+    let isMounted = true;
+    let activeController = new AbortController();
+
+    const loadStats = async (initial = false) => {
+      try {
+        if (initial) {
+          setLoading((prev) => prev);
+        } else {
+          setIsRefreshing(true);
+        }
+        const res = await api.get('/dashboard/stats', {
+          cacheTtl: 30000,
+          signal: activeController.signal,
+        });
+        const payload = res?.data || res;
+        if (isMounted) {
+          setData(payload);
+        }
+      } catch (err) {
+        if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return;
+        if (initial && isMounted) toast.error('Failed to load dashboard statistics');
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+          setIsRefreshing(false);
+        }
+      }
+    };
+
+    loadStats(true);
+
+    const onMutated = (e) => {
+      const affected = e?.detail?.affectedTags || [];
+      const moduleTag = e?.detail?.moduleTag;
+      if (affected.includes('dashboard') || moduleTag === 'dashboard') {
+        activeController.abort();
+        activeController = new AbortController();
+        loadStats(false);
+      }
+    };
+
     window.addEventListener('hrms:data-mutated', onMutated);
-    return () => window.removeEventListener('hrms:data-mutated', onMutated);
+    return () => {
+      isMounted = false;
+      activeController.abort();
+      window.removeEventListener('hrms:data-mutated', onMutated);
+    };
   }, []);
 
   const fetchDashboardStats = async (initial = false) => {
@@ -66,10 +141,11 @@ export default function DashboardPage() {
       } else {
         setIsRefreshing(true);
       }
-      const res = await api.get('/dashboard/stats');
+      const res = await api.get('/dashboard/stats', { cacheTtl: 30000, skipDedupe: true });
       const payload = res?.data || res;
       setData(payload);
     } catch (err) {
+      if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return;
       if (initial) toast.error('Failed to load dashboard statistics');
     } finally {
       setLoading(false);
@@ -95,7 +171,6 @@ export default function DashboardPage() {
         }));
       }
       toast.success(res?.message || res?.data?.message || 'Clocked in successfully!');
-      fetchDashboardStats(false);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message);
     } finally {
@@ -119,7 +194,6 @@ export default function DashboardPage() {
         }));
       }
       toast.success(res?.message || res?.data?.message || 'Clocked out successfully!');
-      fetchDashboardStats(false);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message);
     } finally {
@@ -169,9 +243,7 @@ export default function DashboardPage() {
               </span>
               <span className="text-blue-200 text-xs font-semibold">PR VISION INNOVATIONS</span>
             </div>
-            <h1 className="text-xl sm:text-2xl font-black tracking-tight">
-              Good {currentTime.getHours() < 12 ? 'morning' : currentTime.getHours() < 17 ? 'afternoon' : 'evening'}, {user?.name}!
-            </h1>
+            <LiveGreeting userName={user?.name} />
             <p className="mt-1 text-xs text-blue-100">
               People. Process. Performance. &bull; Bengaluru HQ, Mumbai, and Hyderabad Operations.
             </p>
@@ -189,14 +261,7 @@ export default function DashboardPage() {
               <span className="hidden sm:inline">{isRefreshing ? 'Syncing...' : 'Refresh'}</span>
             </button>
 
-            <div className="px-3.5 py-2 rounded-xl bg-black/20 backdrop-blur-md border border-white/10 text-right">
-              <div className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider">
-                {currentTime.toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })}
-              </div>
-              <div className="font-mono text-base font-bold text-white tracking-wider">
-                {currentTime.toLocaleTimeString()}
-              </div>
-            </div>
+            <LiveClockDisplay />
 
             {/* Quick Clock button for Employee & Manager */}
             {(isEmployee || isManager) && (

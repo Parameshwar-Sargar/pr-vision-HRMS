@@ -10,15 +10,18 @@ export default function PerformancePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchReviews();
+    const controller = new AbortController();
+    fetchReviews(controller.signal);
+    return () => controller.abort();
   }, []);
 
-  const fetchReviews = async () => {
+  const fetchReviews = async (signal = null) => {
     try {
       setLoading(true);
-      const res = await api.get('/performance');
-      setReviews(res.data.reviews || []);
+      const res = await api.get('/performance', { signal, cacheTtl: 15000 });
+      setReviews(res.data?.reviews || res.reviews || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load performance evaluations');
     } finally {
       setLoading(false);

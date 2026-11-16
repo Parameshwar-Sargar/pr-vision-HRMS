@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import Holiday from '../../models/Holiday.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 
 const holidaySchema = z.object({
   name: z.string().min(2, 'Holiday name is required'),
@@ -18,11 +18,22 @@ export const getHolidays = async (req, res, next) => {
       filter.$or = [{ branchId: null }, { branchId }];
     }
 
-    const holidays = await Holiday.find(filter)
-      .populate('branchId', 'name code')
-      .sort({ date: 1 });
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 200 });
 
-    return sendSuccess(res, 'Holidays retrieved.', { holidays });
+    const [holidays, total] = await Promise.all([
+      Holiday.find(filter)
+        .populate('branchId', 'name code')
+        .sort({ date: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Holiday.countDocuments(filter),
+    ]);
+
+    return sendSuccess(res, 'Holidays retrieved.', {
+      holidays,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }

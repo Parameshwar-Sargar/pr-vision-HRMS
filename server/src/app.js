@@ -5,8 +5,8 @@ import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import morgan from 'morgan';
 import path from 'path';
-import mongoose from 'mongoose';
 import { env } from './config/env.js';
+import { getDatabaseStatus, isDatabaseReady } from './config/db.js';
 import routes from './routes/index.js';
 import { errorHandler } from './middleware/errorMiddleware.js';
 
@@ -37,7 +37,6 @@ app.use(
       'Content-Type',
       'Authorization',
       'X-Requested-With',
-      'x-target-tenant',
       'X-Tab-Id',
       'X-Session-Id',
     ],
@@ -63,35 +62,105 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser(env.COOKIE_SECRET));
 
+// Server-side execution timing header (X-Response-Time)
+app.use((req, res, next) => {
+  const startAt = process.hrtime.bigint();
+  const originalWriteHead = res.writeHead;
+  res.writeHead = function (...args) {
+    const durationMs = Number(process.hrtime.bigint() - startAt) / 1e6;
+    if (!res.headersSent) {
+      res.setHeader('X-Response-Time', `${durationMs.toFixed(2)}ms`);
+    }
+    return originalWriteHead.apply(this, args);
+  };
+  next();
+});
+
 // Logger (Skip in test suite)
 if (env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
 }
 
-// Serve uploaded files statically
-app.use('/uploads', express.static(path.resolve('uploads')));
-
-// Health Check Endpoint
-app.get('/api/health', (req, res) => {
-  const isDbConnected = mongoose.connection.readyState === 1;
-  const dbName = mongoose.connection.name || 'pr_vision_hrms';
-  const uptimeSeconds = Math.floor(process.uptime());
-  res.status(isDbConnected ? 200 : 503).json({
-    success: isDbConnected,
-    server: 'running',
-    database: isDbConnected ? 'connected' : 'disconnected',
-    databaseName: dbName,
-    uptime: uptimeSeconds,
+// Disable unauthenticated or direct public file access under /uploads
+app.use('/uploads', (req, res) => {
+  const hasBearer =
+    typeof req.headers.authorization === 'string' &&
+    req.headers.authorization.startsWith('Bearer ');
+  return res.status(hasBearer ? 403 : 401).json({
+    success: false,
+    message: hasBearer
+      ? 'Access denied: Direct access to /uploads is disabled. Use authenticated API download endpoints.'
+      : 'Authentication required. Direct public access to private uploads is forbidden.',
+    errors: [],
   });
 });
 
-// Guard: verify database connectivity for API operations
+// Health Check Handlers (Liveness & Readiness)
+const healthCheckHandler = (req, res) => {
+  const dbStatus = getDatabaseStatus();
+  const isReady = dbStatus.ready;
+  const uptimeSeconds = Math.floor(process.uptime());
+
+  res.status(isReady ? 200 : 503).json({
+    success: isReady,
+    status: isReady ? 'healthy' : 'degraded',
+    live: true,
+    ready: isReady,
+    server: 'running',
+    environment: env.NODE_ENV,
+    uptime: uptimeSeconds,
+    timestamp: new Date().toISOString(),
+    database: isReady ? 'connected' : dbStatus.state,
+    databaseName: dbStatus.databaseName,
+    databaseState: {
+      ready: dbStatus.ready,
+      state: dbStatus.state,
+      readyState: dbStatus.readyState,
+      initialConnectDurationMs: dbStatus.initialConnectDurationMs,
+      lastConnectedAt: dbStatus.lastConnectedAt,
+      lastDisconnectedAt: dbStatus.lastDisconnectedAt,
+      reconnectAttempts: dbStatus.reconnectAttempts,
+      syncIndexesEnabled: dbStatus.syncIndexesEnabled,
+    },
+  });
+};
+
+app.get('/api/health', healthCheckHandler);
+app.get('/api/v1/health', healthCheckHandler);
+
+app.get('/api/health/live', (req, res) => {
+  res.status(200).json({
+    success: true,
+    status: 'alive',
+    live: true,
+    server: 'running',
+    environment: env.NODE_ENV,
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/health/ready', (req, res) => {
+  const dbStatus = getDatabaseStatus();
+  res.status(dbStatus.ready ? 200 : 503).json({
+    success: dbStatus.ready,
+    status: dbStatus.ready ? 'ready' : 'not_ready',
+    ready: dbStatus.ready,
+    environment: env.NODE_ENV,
+    database: dbStatus.ready ? 'connected' : dbStatus.state,
+    databaseName: dbStatus.databaseName,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Guard: verify database readiness for API operations
 app.use('/api/v1', (req, res, next) => {
   if (req.path === '/health') return next();
-  if (mongoose.connection.readyState !== 1) {
+  if (!isDatabaseReady()) {
     return res.status(503).json({
       success: false,
-      message: 'Database is currently disconnected. Please verify your MongoDB Atlas IP whitelist (Network Access: add current IP or 0.0.0.0/0).',
+      message:
+        'Database is currently disconnected or not ready. Please verify MongoDB Atlas connectivity and Network Access whitelist.',
       errors: ['Database unavailable'],
     });
   }

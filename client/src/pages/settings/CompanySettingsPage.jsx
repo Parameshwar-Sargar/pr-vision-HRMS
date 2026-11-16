@@ -76,26 +76,30 @@ export default function CompanySettingsPage() {
   }, [queryTab, location.pathname, isAdminOrHR]);
 
   useEffect(() => {
-    fetchOrganizationData();
-    fetchActiveSessions();
+    const controller = new AbortController();
+    fetchOrganizationData(controller.signal);
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
     if (activeTab === 'security') {
-      fetchActiveSessions();
+      const controller = new AbortController();
+      fetchActiveSessions(controller.signal);
+      return () => controller.abort();
     }
   }, [activeTab]);
 
-  const fetchActiveSessions = async () => {
+  const fetchActiveSessions = async (signal = null) => {
     try {
       setLoadingSessions(true);
-      const res = await api.get('/auth/sessions');
+      const res = await api.get('/auth/sessions', { signal, cacheTtl: 5000 });
       const payload = res?.data || res;
       setSessions(payload?.sessions || []);
       if (payload?.currentSession) {
         setCurrentSession(payload.currentSession);
       }
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       // Non-blocking
     } finally {
       setLoadingSessions(false);
@@ -134,7 +138,7 @@ export default function CompanySettingsPage() {
     }
   };
 
-  const fetchOrganizationData = async () => {
+  const fetchOrganizationData = async (signal = null) => {
     if (!isAdminOrHR) {
       setLoading(false);
       return;
@@ -142,12 +146,13 @@ export default function CompanySettingsPage() {
     try {
       setLoading(true);
       const [settingsRes, branchesRes] = await Promise.all([
-        api.get('/organization/settings'),
-        api.get('/organization/branches'),
+        api.get('/organization/settings', { signal, cacheTtl: 30000 }),
+        api.get('/organization/branches', { signal, cacheTtl: 30000 }),
       ]);
       setCompany(settingsRes.data.company || {});
       setBranches(branchesRes.data.branches || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load organization settings');
     } finally {
       setLoading(false);

@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import api from '../../services/api';
+import { fetchMasterData } from '../../store/slices/masterDataSlice';
 import toast from 'react-hot-toast';
 import {
   Briefcase,
@@ -12,9 +14,11 @@ import {
 } from 'lucide-react';
 
 export default function RecruitmentPage() {
+  const dispatch = useDispatch();
+  const { departments } = useSelector((state) => state.masterData);
+
   const [jobs, setJobs] = useState([]);
   const [candidates, setCandidates] = useState([]);
-  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Modals
@@ -45,21 +49,23 @@ export default function RecruitmentPage() {
   });
 
   useEffect(() => {
-    fetchRecruitmentData();
-  }, []);
+    dispatch(fetchMasterData(false));
+    const controller = new AbortController();
+    fetchRecruitmentData(controller.signal);
+    return () => controller.abort();
+  }, [dispatch]);
 
-  const fetchRecruitmentData = async () => {
+  const fetchRecruitmentData = async (signal = null) => {
     try {
       setLoading(true);
-      const [jobsRes, candRes, deptRes] = await Promise.all([
-        api.get('/recruitment/jobs'),
-        api.get('/recruitment/candidates'),
-        api.get('/departments'),
+      const [jobsRes, candRes] = await Promise.all([
+        api.get('/recruitment/jobs', { signal, cacheTtl: 10000 }),
+        api.get('/recruitment/candidates', { signal, cacheTtl: 10000 }),
       ]);
-      setJobs(jobsRes.data.jobs || []);
-      setCandidates(candRes.data.candidates || []);
-      setDepartments(deptRes.data.departments || []);
+      setJobs(jobsRes.data?.jobs || jobsRes.jobs || []);
+      setCandidates(candRes.data?.candidates || candRes.candidates || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load recruitment data');
     } finally {
       setLoading(false);

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import api from '../../services/api';
+import api, { downloadAuthenticatedFile } from '../../services/api';
 import toast from 'react-hot-toast';
 import { BarChart3, Download, Users, CalendarCheck, DollarSign } from 'lucide-react';
 
@@ -7,28 +7,41 @@ export default function ReportsPage() {
   const [activeReport, setActiveReport] = useState('employees'); // 'employees' | 'attendance' | 'payroll'
   const [reportData, setReportData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
-    fetchReportData();
+    const controller = new AbortController();
+    fetchReportData(controller.signal);
+    return () => controller.abort();
   }, [activeReport]);
 
-  const fetchReportData = async () => {
+  const fetchReportData = async (signal = null) => {
     try {
       setLoading(true);
-      const res = await api.get(`/reports/${activeReport}`);
-      if (activeReport === 'employees') setReportData(res.data.employees || []);
-      if (activeReport === 'attendance') setReportData(res.data.attendance || []);
-      if (activeReport === 'payroll') setReportData(res.data.payslips || []);
+      const res = await api.get(`/reports/${activeReport}`, { signal, cacheTtl: 15000 });
+      if (activeReport === 'employees') setReportData(res.data?.employees || res.employees || []);
+      if (activeReport === 'attendance') setReportData(res.data?.attendance || res.attendance || []);
+      if (activeReport === 'payroll') setReportData(res.data?.payslips || res.payslips || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to generate report');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleExportCSV = () => {
-    const url = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/reports/${activeReport}?format=csv`;
-    window.open(url, '_blank');
+  const handleExportCSV = async () => {
+    try {
+      setIsExporting(true);
+      toast.loading(`Exporting ${activeReport.toUpperCase()} CSV...`, { id: 'csv-export' });
+      const url = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/reports/${activeReport}?format=csv`;
+      await downloadAuthenticatedFile(url, `${activeReport}-report.csv`);
+      toast.success(`${activeReport.toUpperCase()} report exported!`, { id: 'csv-export' });
+    } catch (err) {
+      toast.error(err.message || 'CSV Export failed', { id: 'csv-export' });
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (

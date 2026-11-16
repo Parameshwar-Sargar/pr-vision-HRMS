@@ -34,21 +34,24 @@ export default function LeavesPage() {
   const isApprover = user?.role === 'ADMIN' || user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER' || user?.role === 'MANAGER';
 
   useEffect(() => {
-    fetchLeaveData(true);
+    const controller = new AbortController();
+    fetchLeaveData(true, controller.signal);
+    return () => controller.abort();
   }, []);
 
-  const fetchLeaveData = async (showSkeleton = false) => {
+  const fetchLeaveData = async (showSkeleton = false, signal = null) => {
     try {
       if (showSkeleton) setLoading(true);
       const [balRes, reqRes, typesRes] = await Promise.all([
-        api.get('/leaves/balances'),
-        api.get('/leaves/requests'),
-        api.get('/leaves/types'),
+        api.get('/leaves/balances', { signal, cacheTtl: 10000 }),
+        api.get('/leaves/requests', { signal, cacheTtl: 10000 }),
+        api.get('/leaves/types', { signal, cacheTtl: 300000 }),
       ]);
       setBalances(balRes.data?.balances || balRes.balances || []);
       setRequests(reqRes.data?.requests || reqRes.requests || []);
       setLeaveTypes(typesRes.data?.leaveTypes || typesRes.leaveTypes || []);
     } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load leave records');
     } finally {
       setLoading(false);

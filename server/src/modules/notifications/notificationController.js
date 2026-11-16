@@ -1,20 +1,29 @@
 import Notification from '../../models/Notification.js';
-import { sendSuccess } from '../../utils/responseUtils.js';
+import { sendSuccess, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 
 export const getNotifications = async (req, res, next) => {
   try {
-    const notifications = await Notification.find({
-      recipientId: req.user._id,
-    })
-      .sort({ createdAt: -1 })
-      .limit(30);
+    const query = { recipientId: req.user._id };
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 30, maxLimit: 100 });
 
-    const unreadCount = await Notification.countDocuments({
-      recipientId: req.user._id,
-      isRead: false,
+    const [notifications, unreadCount, total] = await Promise.all([
+      Notification.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Notification.countDocuments({
+        recipientId: req.user._id,
+        isRead: false,
+      }),
+      Notification.countDocuments(query),
+    ]);
+
+    return sendSuccess(res, 'Notifications retrieved.', {
+      notifications,
+      unreadCount,
+      pagination: buildPaginationMeta(total, page, limit),
     });
-
-    return sendSuccess(res, 'Notifications retrieved.', { notifications, unreadCount });
   } catch (error) {
     next(error);
   }

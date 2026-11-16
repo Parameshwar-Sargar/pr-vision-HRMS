@@ -12,6 +12,11 @@ import {
   parseDeviceLabel,
 } from '../../utils/tokenUtils.js';
 import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import {
+  isValidObjectId,
+  sanitizeUserForResponse,
+  sanitizeCompanyForRole,
+} from '../../utils/securityUtils.js';
 import { logAudit } from '../../middleware/auditMiddleware.js';
 import { invalidateAuthCache } from '../../middleware/authMiddleware.js';
 
@@ -27,15 +32,19 @@ const loginSchema = z.object({
 let cachedCompanySettings = null;
 let companyCacheExpiresAt = 0;
 
-export const getCachedCompanySettings = async () => {
+export const invalidateCompanySettingsCache = () => {
+  cachedCompanySettings = null;
+  companyCacheExpiresAt = 0;
+};
+
+export const getCachedCompanySettings = async (role = 'EMPLOYEE') => {
   const now = Date.now();
-  if (cachedCompanySettings && companyCacheExpiresAt > now) {
-    return cachedCompanySettings;
+  if (!cachedCompanySettings || companyCacheExpiresAt <= now) {
+    const company = await CompanySettings.findOne().lean();
+    cachedCompanySettings = company || { companyName: 'PR VISION INNOVATIONS' };
+    companyCacheExpiresAt = now + 60000;
   }
-  const company = await CompanySettings.findOne().lean();
-  cachedCompanySettings = company || { companyName: 'PR VISION INNOVATIONS' };
-  companyCacheExpiresAt = now + 60000;
-  return cachedCompanySettings;
+  return sanitizeCompanyForRole(cachedCompanySettings, role);
 };
 
 const clearLegacyAuthCookies = (res) => {
@@ -52,7 +61,7 @@ export const login = async (req, res, next) => {
     const normalizedEmail = validated.email.trim().toLowerCase();
     const [user, company] = await Promise.all([
       User.findOne({ email: normalizedEmail }).populate('branchId'),
-      getCachedCompanySettings(),
+      getCachedCompanySettings('ADMIN'),
     ]);
     if (!user) {
       return sendError(res, 'Invalid email or password credentials.', [], 401);
@@ -118,9 +127,9 @@ export const login = async (req, res, next) => {
     clearLegacyAuthCookies(res);
 
     return sendSuccess(res, 'Login successful.', {
-      user,
+      user: sanitizeUserForResponse(user),
       employee: employee || null,
-      company,
+      company: sanitizeCompanyForRole(company, user.role),
       tokens,
       session: userSession.toSafeObject(sessionId),
     });
@@ -143,9 +152,19 @@ export const refreshTokenHandler = async (req, res, next) => {
       return sendError(res, 'Invalid or expired refresh token. Please sign in again.', [], 401);
     }
 
+    if (!decoded || decoded.type !== 'refresh' || !isValidObjectId(decoded.userId)) {
+      return sendError(res, 'Invalid refresh token payload. Please sign in again.', [], 401);
+    }
+
     const { userId, sessionId } = decoded;
     if (!sessionId) {
       return sendError(res, 'Session identifier missing from refresh token. Please sign in again.', [], 401);
+    }
+
+    const tokenTenantId = String(decoded.tenantId || 'pr_vision_hrms').trim();
+    const targetTenantHeader = req.headers['x-target-tenant'];
+    if (targetTenantHeader && String(targetTenantHeader).trim() !== tokenTenantId) {
+      return sendError(res, 'Access denied: Cross-tenant refresh attempt forbidden.', [], 403);
     }
 
     const [user, session] = await Promise.all([
@@ -163,6 +182,10 @@ export const refreshTokenHandler = async (req, res, next) => {
 
     if (!session) {
       return sendError(res, 'Session not found. Please sign in again.', [], 401);
+    }
+
+    if (session.tenantId && session.tenantId !== tokenTenantId) {
+      return sendError(res, 'Cross-tenant session mismatch.', [], 403);
     }
 
     if (session.isRevoked) {
@@ -213,11 +236,12 @@ export const logout = async (req, res, next) => {
   try {
     const userId = req.user?._id;
     const sessionId = req.sessionId;
+    const tenantId = req.tenantId || 'pr_vision_hrms';
 
     if (userId && sessionId) {
       invalidateAuthCache(userId, sessionId);
       await UserSession.findOneAndUpdate(
-        { sessionId, userId },
+        { sessionId, userId, tenantId },
         {
           $set: {
             isRevoked: true,
@@ -243,12 +267,13 @@ export const logout = async (req, res, next) => {
 export const logoutAll = async (req, res, next) => {
   try {
     const userId = req.user?._id;
+    const tenantId = req.tenantId || 'pr_vision_hrms';
     let revokedCount = 0;
 
     if (userId) {
       invalidateAuthCache(userId);
       const result = await UserSession.updateMany(
-        { userId, isRevoked: false },
+        { userId, tenantId, isRevoked: false },
         {
           $set: {
             isRevoked: true,
@@ -273,10 +298,12 @@ export const logoutAll = async (req, res, next) => {
 export const getActiveSessions = async (req, res, next) => {
   try {
     const userId = req.user._id;
+    const tenantId = req.tenantId || 'pr_vision_hrms';
     const currentSessionId = req.sessionId;
 
     const sessions = await UserSession.find({
       userId,
+      tenantId,
       isRevoked: false,
       expiresAt: { $gt: new Date() },
     }).sort({ lastActiveAt: -1 });
@@ -298,8 +325,9 @@ export const revokeSession = async (req, res, next) => {
   try {
     const { sessionId } = req.params;
     const userId = req.user._id;
+    const tenantId = req.tenantId || 'pr_vision_hrms';
 
-    const session = await UserSession.findOne({ sessionId, userId });
+    const session = await UserSession.findOne({ sessionId, userId, tenantId });
     if (!session) {
       return sendError(res, 'Session not found.', [], 404);
     }
@@ -325,7 +353,7 @@ export const revokeSession = async (req, res, next) => {
 
 export const getCurrentUser = async (req, res, next) => {
   try {
-    const company = await getCachedCompanySettings();
+    const company = await getCachedCompanySettings(req.user?.role);
 
     let sessionMeta = null;
     if (req.currentSession) {
@@ -347,7 +375,7 @@ export const getCurrentUser = async (req, res, next) => {
     }
 
     return sendSuccess(res, 'User profile retrieved.', {
-      user: req.user,
+      user: sanitizeUserForResponse(req.user),
       employee: req.employee || null,
       company,
       session: sessionMeta,

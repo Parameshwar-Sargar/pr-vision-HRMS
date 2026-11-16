@@ -2,7 +2,8 @@ import TrainingProgram from '../../models/TrainingProgram.js';
 import TrainingAssignment from '../../models/TrainingAssignment.js';
 import Employee from '../../models/Employee.js';
 import { ROLES } from '../../config/constants.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
+import { isAdminOrHR, isValidObjectId } from '../../utils/securityUtils.js';
 
 export const getTrainingPrograms = async (req, res, next) => {
   try {
@@ -11,8 +12,11 @@ export const getTrainingPrograms = async (req, res, next) => {
     if (category) query.category = category;
     if (status) query.status = status;
 
-    const [programs, counts] = await Promise.all([
-      TrainingProgram.find(query).sort({ startDate: 1 }).lean(),
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+
+    const [programs, total, counts] = await Promise.all([
+      TrainingProgram.find(query).sort({ startDate: 1 }).skip(skip).limit(limit).lean(),
+      TrainingProgram.countDocuments(query),
       TrainingAssignment.aggregate([
         {
           $group: {
@@ -36,7 +40,10 @@ export const getTrainingPrograms = async (req, res, next) => {
       };
     });
 
-    return sendSuccess(res, 'Training programs retrieved.', { programs: programsWithCount });
+    return sendSuccess(res, 'Training programs retrieved.', {
+      programs: programsWithCount,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -64,10 +71,26 @@ export const createTrainingProgram = async (req, res, next) => {
 export const updateTrainingProgram = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid training program ID.', [], 400);
+    }
     const program = await TrainingProgram.findById(id);
     if (!program) return sendError(res, 'Training program not found.', [], 404);
 
-    Object.assign(program, req.body);
+    const allowedFields = [
+      'title',
+      'category',
+      'trainerName',
+      'description',
+      'durationHours',
+      'mode',
+      'status',
+    ];
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        program[field] = req.body[field];
+      }
+    }
     if (req.body.startDate) program.startDate = new Date(req.body.startDate);
     if (req.body.endDate) program.endDate = new Date(req.body.endDate);
     await program.save();
@@ -83,22 +106,68 @@ export const assignTraining = async (req, res, next) => {
     const { id } = req.params; // programId
     const { employeeIds } = req.body; // array of employee IDs
 
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid training program ID.', [], 400);
+    }
+
+    const program = await TrainingProgram.findById(id).select('_id').lean();
+    if (!program) {
+      return sendError(res, 'Training program not found.', [], 404);
+    }
+
     if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
       return sendError(res, 'Please provide an array of employee IDs to enroll.', [], 400);
     }
 
-    const assignments = [];
-    for (const empId of employeeIds) {
-      const existing = await TrainingAssignment.findOne({ programId: id, employeeId: empId });
-      if (!existing) {
-        const doc = await TrainingAssignment.create({
-          programId: id,
-          employeeId: empId,
-          status: 'Enrolled',
-        });
-        assignments.push(doc);
+    const uniqueEmpIds = [...new Set(employeeIds.map((empId) => String(empId)).filter(Boolean))];
+    if (uniqueEmpIds.some((empId) => !isValidObjectId(empId))) {
+      return sendError(res, 'One or more employee IDs are invalid.', [], 400);
+    }
+
+    // Manager may enroll ONLY direct reporting team members (or self)
+    if (req.user.role === ROLES.MANAGER) {
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No manager employee profile found.', [], 403);
+      }
+      const team = await Employee.find({
+        managerId: req.verifiedEmployeeId,
+        isDeleted: false,
+      })
+        .select('_id')
+        .lean();
+      const allowedSet = new Set([
+        ...team.map((t) => t._id.toString()),
+        req.verifiedEmployeeId.toString(),
+      ]);
+      const unauthorized = uniqueEmpIds.filter((empId) => !allowedSet.has(empId));
+      if (unauthorized.length > 0) {
+        return sendError(
+          res,
+          'Access denied: Managers can only assign training to employees in their direct reporting line.',
+          [],
+          403
+        );
       }
     }
+
+    const existing = await TrainingAssignment.find({
+      programId: id,
+      employeeId: { $in: uniqueEmpIds },
+    })
+      .select('employeeId')
+      .lean();
+
+    const existingSet = new Set(existing.map((e) => e.employeeId.toString()));
+    const toInsert = uniqueEmpIds
+      .filter((empId) => !existingSet.has(empId))
+      .map((empId) => ({
+        programId: id,
+        employeeId: empId,
+        status: 'Enrolled',
+      }));
+
+    const assignments =
+      toInsert.length > 0 ? await TrainingAssignment.insertMany(toInsert) : [];
 
     return sendSuccess(res, `Successfully enrolled ${assignments.length} employees into training.`, { assignments }, 201);
   } catch (error) {
@@ -111,12 +180,18 @@ export const getTrainingAssignments = async (req, res, next) => {
     const { programId, employeeId } = req.query;
     const query = {};
 
-    if (req.user.role === ROLES.EMPLOYEE) {
-      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No assignments found.', { assignments: [] });
-      query.employeeId = req.verifiedEmployeeId;
+    if (isAdminOrHR(req.user.role)) {
+      if (employeeId) {
+        if (!isValidObjectId(employeeId)) {
+          return sendError(res, 'Invalid employee ID format.', [], 400);
+        }
+        query.employeeId = employeeId;
+      }
     } else if (req.user.role === ROLES.MANAGER) {
-      if (!req.verifiedEmployeeId) return sendSuccess(res, 'No assignments found.', { assignments: [] });
-      const team = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id');
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No manager employee profile found.', [], 403);
+      }
+      const team = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id').lean();
       const allowedIds = [...team.map((t) => t._id), req.verifiedEmployeeId];
       if (employeeId) {
         if (!allowedIds.some((id) => id.toString() === employeeId.toString())) {
@@ -126,18 +201,36 @@ export const getTrainingAssignments = async (req, res, next) => {
       } else {
         query.employeeId = { $in: allowedIds };
       }
-    } else if (employeeId) {
-      query.employeeId = employeeId;
+    } else {
+      // EMPLOYEE, RECRUITER, PAYROLL_ADMIN strictly scoped to self
+      if (!req.verifiedEmployeeId) {
+        return sendSuccess(res, 'No assignments found.', { assignments: [] });
+      }
+      if (employeeId && String(employeeId) !== req.verifiedEmployeeId.toString()) {
+        return sendError(res, 'Access denied: You can only view your own training assignments.', [], 403);
+      }
+      query.employeeId = req.verifiedEmployeeId;
     }
 
     if (programId) query.programId = programId;
 
-    const assignments = await TrainingAssignment.find(query)
-      .populate('programId')
-      .populate('employeeId', 'firstName lastName employeeId departmentId')
-      .sort({ createdAt: -1 });
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
 
-    return sendSuccess(res, 'Training assignments retrieved.', { assignments });
+    const [assignments, total] = await Promise.all([
+      TrainingAssignment.find(query)
+        .populate('programId')
+        .populate('employeeId', 'firstName lastName employeeId departmentId')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      TrainingAssignment.countDocuments(query),
+    ]);
+
+    return sendSuccess(res, 'Training assignments retrieved.', {
+      assignments,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -146,13 +239,47 @@ export const getTrainingAssignments = async (req, res, next) => {
 export const updateAssignmentProgress = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid training assignment ID.', [], 400);
+    }
     const { status, score, feedback } = req.body;
 
     const assignment = await TrainingAssignment.findById(id);
     if (!assignment) return sendError(res, 'Assignment not found.', [], 404);
 
-    if (status) assignment.status = status;
-    if (score !== undefined) assignment.score = score;
+    // Ownership verification: owner employee, direct manager, HR Manager, or Admin
+    const isOwner =
+      req.verifiedEmployeeId && assignment.employeeId.toString() === req.verifiedEmployeeId.toString();
+
+    if (!isOwner && !isAdminOrHR(req.user.role)) {
+      if (req.user.role === ROLES.MANAGER && req.verifiedEmployeeId) {
+        const directReport = await Employee.findOne({
+          _id: assignment.employeeId,
+          managerId: req.verifiedEmployeeId,
+          isDeleted: false,
+        })
+          .select('_id')
+          .lean();
+        if (!directReport) {
+          return sendError(
+            res,
+            'Access denied: You can only update training progress for yourself or direct reports.',
+            [],
+            403
+          );
+        }
+      } else {
+        return sendError(
+          res,
+          'Access denied: You cannot modify another employee’s training progress.',
+          [],
+          403
+        );
+      }
+    }
+
+    if (status !== undefined) assignment.status = status;
+    if (score !== undefined) assignment.score = Number(score);
     if (feedback !== undefined) assignment.feedback = feedback;
     if (status === 'Completed') assignment.completedDate = new Date();
 

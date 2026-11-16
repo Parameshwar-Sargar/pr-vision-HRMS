@@ -1,4 +1,5 @@
 import axios from 'axios';
+import queryCache from './queryCache';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
@@ -29,6 +30,7 @@ export const getTabId = () => {
 
 export const clearTabSessionStorage = () => {
   if (typeof window === 'undefined') return;
+  queryCache.clear();
   sessionStorage.removeItem('pr_access_token');
   sessionStorage.removeItem('pr_refresh_token');
   sessionStorage.removeItem('pr_session_id');
@@ -88,12 +90,32 @@ api.interceptors.response.use(
     if (
       typeof window !== 'undefined' &&
       ['post', 'put', 'patch', 'delete'].includes(method) &&
+      (url.includes('/auth/login') || url.includes('/auth/logout'))
+    ) {
+      queryCache.clear();
+      if (url.includes('/auth/logout')) {
+        window.dispatchEvent(new CustomEvent('hrms:session-cleared'));
+      }
+    }
+
+    if (
+      typeof window !== 'undefined' &&
+      ['post', 'put', 'patch', 'delete'].includes(method) &&
       !url.includes('/auth/login') &&
       !url.includes('/auth/refresh')
     ) {
+      const affectedTags = queryCache.getAffectedTags(method, url);
+      queryCache.invalidateTags(affectedTags);
+      queryCache.bumpTagVersions?.(affectedTags);
       window.dispatchEvent(
         new CustomEvent('hrms:data-mutated', {
-          detail: { method, url, data: response.data },
+          detail: {
+            method,
+            url,
+            affectedTags,
+            moduleTag: queryCache.getModuleTag(url),
+            data: response.data,
+          },
         })
       );
     }
@@ -202,5 +224,78 @@ api.interceptors.response.use(
     return Promise.reject(customErr);
   }
 );
+
+// Transparent In-Flight Request Deduplication and Query Caching wrapper for GET requests
+const originalGet = api.get.bind(api);
+
+api.get = function (url, config = {}) {
+  const { cacheTtl, skipDedupe, tags, ...axiosConfig } = config;
+
+  if (skipDedupe || axiosConfig.responseType === 'blob') {
+    return originalGet(url, axiosConfig);
+  }
+
+  const tabId = getTabId();
+  const sessionId =
+    typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('pr_session_id') || 'anon' : 'anon';
+  const rawKey = queryCache.generateKey('get', url, axiosConfig.params);
+  const key = `${tabId}:${sessionId}:${rawKey}`;
+  const resolvedTags = tags || [queryCache.getModuleTag(url)];
+
+  return queryCache.deduplicate(
+    key,
+    (internalSignal) => originalGet(url, { ...axiosConfig, signal: internalSignal }),
+    { ttl: cacheTtl ?? 0, tags: resolvedTags, signal: axiosConfig.signal }
+  );
+};
+
+export const downloadAuthenticatedFile = async (url, filename = 'download') => {
+  try {
+    const response = await api.get(url, {
+      responseType: 'blob',
+      skipDedupe: true,
+    });
+
+    const blob =
+      response instanceof Blob
+        ? response
+        : response?.data instanceof Blob
+          ? response.data
+          : new Blob([response?.data ?? response]);
+
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 1000);
+  } catch (err) {
+    if (err?.response?.data instanceof Blob) {
+      try {
+        const blobData = err.response.data;
+        const text =
+          typeof blobData.text === 'function'
+            ? await blobData.text()
+            : await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result || ''));
+                reader.onerror = reject;
+                reader.readAsText(blobData);
+              });
+        const parsed = JSON.parse(text);
+        if (parsed?.message) {
+          throw new Error(parsed.message);
+        }
+      } catch (innerErr) {
+        if (innerErr?.message && innerErr.name !== 'SyntaxError') {
+          throw innerErr;
+        }
+      }
+    }
+    throw err;
+  }
+};
 
 export default api;

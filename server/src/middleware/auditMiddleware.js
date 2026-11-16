@@ -1,4 +1,5 @@
 import AuditLog from '../models/AuditLog.js';
+import { sanitizeAuditDetails } from '../utils/securityUtils.js';
 
 export const logAudit = async ({
   req,
@@ -15,6 +16,7 @@ export const logAudit = async ({
     const actorRole = req.user.role;
     const ipAddress = req.ip || req.connection?.remoteAddress || '';
     const userAgent = req.headers['user-agent'] || '';
+    const sanitizedDetails = sanitizeAuditDetails(details);
 
     // Non-blocking audit persistence to avoid adding write latency to API responses
     AuditLog.create({
@@ -24,7 +26,7 @@ export const logAudit = async ({
       action,
       entity,
       entityId,
-      details,
+      details: sanitizedDetails,
       ipAddress,
       userAgent,
     }).catch((err) => {

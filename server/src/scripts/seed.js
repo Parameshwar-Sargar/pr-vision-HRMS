@@ -50,7 +50,7 @@ export const seedDatabase = async ({ disconnect = true, forcePurge = false } = {
     }
 
     // Purge collections ONLY in test environment or when explicitly forced
-    if (process.env.NODE_ENV === 'test' || options?.forcePurge === true) {
+    if (process.env.NODE_ENV === 'test' || forcePurge === true) {
       console.log('🧹 Purging test collections in test environment...');
       await Promise.all([
         User.deleteMany({}),

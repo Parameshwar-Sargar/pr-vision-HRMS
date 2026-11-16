@@ -3,8 +3,10 @@ import LeaveRequest from '../../models/LeaveRequest.js';
 import LeaveType from '../../models/LeaveType.js';
 import LeaveBalance from '../../models/LeaveBalance.js';
 import Employee from '../../models/Employee.js';
+import User from '../../models/User.js';
 import { LEAVE_STATUS, ROLES } from '../../config/constants.js';
-import { sendSuccess, sendError } from '../../utils/responseUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
+import { isAdminOrHR, isValidObjectId } from '../../utils/securityUtils.js';
 import { logAudit } from '../../middleware/auditMiddleware.js';
 
 const leaveApplySchema = z.object({
@@ -20,8 +22,18 @@ const leaveApplySchema = z.object({
  */
 export const getLeaveTypes = async (req, res, next) => {
   try {
-    const leaveTypes = await LeaveType.find({ isActive: true });
-    return sendSuccess(res, 'Leave types retrieved.', { leaveTypes });
+    const query = { isActive: true };
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+
+    const [leaveTypes, total] = await Promise.all([
+      LeaveType.find(query).skip(skip).limit(limit).lean(),
+      LeaveType.countDocuments(query),
+    ]);
+
+    return sendSuccess(res, 'Leave types retrieved.', {
+      leaveTypes,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
   } catch (error) {
     next(error);
   }
@@ -54,32 +66,37 @@ export const getLeaveBalances = async (req, res, next) => {
   try {
     let targetEmployeeId = req.query.employeeId;
 
-    if (req.user.role === ROLES.EMPLOYEE) {
-      if (!req.verifiedEmployeeId) {
-        return sendError(res, 'Access denied: No employee profile found.', [], 403);
+    if (isAdminOrHR(req.user.role)) {
+      if (!targetEmployeeId) {
+        targetEmployeeId = req.verifiedEmployeeId;
+      } else if (!isValidObjectId(targetEmployeeId)) {
+        return sendError(res, 'Invalid employee ID format.', [], 400);
       }
-      if (targetEmployeeId && targetEmployeeId.toString() !== req.verifiedEmployeeId.toString()) {
-        return sendError(res, "Access denied: You cannot view another employee's leave balances.", [], 403);
-      }
-      targetEmployeeId = req.verifiedEmployeeId;
     } else if (req.user.role === ROLES.MANAGER) {
-      if (!targetEmployeeId || targetEmployeeId.toString() === req.verifiedEmployeeId?.toString()) {
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No manager employee profile found.', [], 403);
+      }
+      if (!targetEmployeeId || targetEmployeeId.toString() === req.verifiedEmployeeId.toString()) {
         targetEmployeeId = req.verifiedEmployeeId;
       } else {
         const targetEmp = await Employee.findOne({
           _id: targetEmployeeId,
           managerId: req.verifiedEmployeeId,
           isDeleted: false,
-        });
+        })
+          .select('_id')
+          .lean();
         if (!targetEmp) {
           return sendError(res, 'Access denied: You can only view leave balances for your direct reporting team.', [], 403);
         }
       }
-    } else if (req.user.role === ROLES.HR_MANAGER || req.user.role === ROLES.ADMIN) {
-      if (!targetEmployeeId) {
-        targetEmployeeId = req.verifiedEmployeeId;
-      }
     } else {
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No employee profile found.', [], 403);
+      }
+      if (targetEmployeeId && targetEmployeeId.toString() !== req.verifiedEmployeeId.toString()) {
+        return sendError(res, "Access denied: You cannot view another employee's leave balances.", [], 403);
+      }
       targetEmployeeId = req.verifiedEmployeeId;
     }
 
@@ -91,11 +108,13 @@ export const getLeaveBalances = async (req, res, next) => {
     let balanceDoc = await LeaveBalance.findOne({
       employeeId: targetEmployeeId,
       year: currentYear,
-    }).populate('balances.leaveTypeId');
+    })
+      .populate('balances.leaveTypeId')
+      .lean();
 
     if (!balanceDoc) {
-      const leaveTypes = await LeaveType.find({ isActive: true });
-      balanceDoc = await LeaveBalance.create({
+      const leaveTypes = await LeaveType.find({ isActive: true }).lean();
+      const created = await LeaveBalance.create({
         employeeId: targetEmployeeId,
         year: currentYear,
         balances: leaveTypes.map((lt) => ({
@@ -106,7 +125,8 @@ export const getLeaveBalances = async (req, res, next) => {
           remaining: lt.defaultDaysPerYear,
         })),
       });
-      balanceDoc = await balanceDoc.populate('balances.leaveTypeId');
+      const populated = await created.populate('balances.leaveTypeId');
+      balanceDoc = populated.toObject();
     }
 
     return sendSuccess(res, 'Leave balances retrieved.', { balances: balanceDoc.balances });
@@ -128,12 +148,16 @@ export const applyLeave = async (req, res, next) => {
     }
 
     const [employee, overlap, balanceDoc] = await Promise.all([
-      Employee.findOne({ _id: employeeId, isDeleted: false }).lean(),
+      Employee.findOne({ _id: employeeId, isDeleted: false })
+        .select('_id firstName lastName employeeId departmentId')
+        .lean(),
       LeaveRequest.findOne({
         employeeId,
         status: { $in: [LEAVE_STATUS.PENDING, LEAVE_STATUS.APPROVED] },
         $or: [{ startDate: { $lte: new Date(validated.endDate) }, endDate: { $gte: new Date(validated.startDate) } }],
-      }).lean(),
+      })
+        .select('_id')
+        .lean(),
       LeaveBalance.findOne({
         employeeId,
         year: new Date(validated.startDate).getFullYear(),
@@ -218,7 +242,7 @@ export const applyLeave = async (req, res, next) => {
  */
 export const getLeaveRequests = async (req, res, next) => {
   try {
-    const { status, employeeId, page = 1, limit = 20 } = req.query;
+    const { status, employeeId } = req.query;
 
     const query = {};
 
@@ -227,19 +251,23 @@ export const getLeaveRequests = async (req, res, next) => {
     }
 
     // Strict Role-Based Data Isolation
-    if (req.user.role === ROLES.EMPLOYEE) {
-      if (!req.verifiedEmployeeId) {
-        return sendError(res, 'Access denied: No employee profile is linked to this account.', [], 403);
+    if (isAdminOrHR(req.user.role)) {
+      if (employeeId) {
+        if (!isValidObjectId(employeeId)) {
+          return sendError(res, 'Invalid employee ID format.', [], 400);
+        }
+        query.employeeId = employeeId;
       }
-      if (employeeId && employeeId.toString() !== req.verifiedEmployeeId.toString()) {
-        return sendError(res, 'Access denied: Employees can only view their own leave records.', [], 403);
-      }
-      query.employeeId = req.verifiedEmployeeId;
     } else if (req.user.role === ROLES.MANAGER) {
       if (!req.verifiedEmployeeId) {
         return sendError(res, 'Access denied: No manager employee profile found.', [], 403);
       }
-      const teamEmployees = await Employee.find({ managerId: req.verifiedEmployeeId, isDeleted: false }).select('_id');
+      const teamEmployees = await Employee.find({
+        managerId: req.verifiedEmployeeId,
+        isDeleted: false,
+      })
+        .select('_id')
+        .lean();
       const teamIds = teamEmployees.map((e) => e._id);
       teamIds.push(req.verifiedEmployeeId);
 
@@ -252,26 +280,25 @@ export const getLeaveRequests = async (req, res, next) => {
       } else {
         query.employeeId = { $in: teamIds };
       }
-    } else if (req.user.role === ROLES.HR_MANAGER || req.user.role === ROLES.ADMIN) {
-      if (employeeId) {
-        query.employeeId = employeeId;
-      }
     } else {
-      // Any other role defaults strictly to self-only
-      if (req.verifiedEmployeeId) {
-        query.employeeId = req.verifiedEmployeeId;
-      } else {
-        return sendError(res, 'Access denied: Insufficient permissions to view leave records.', [], 403);
+      // EMPLOYEE, RECRUITER, PAYROLL_ADMIN strictly scoped to self only
+      if (!req.verifiedEmployeeId) {
+        return sendError(res, 'Access denied: No employee profile is linked to this account.', [], 403);
       }
+      if (employeeId && employeeId.toString() !== req.verifiedEmployeeId.toString()) {
+        return sendError(res, 'Access denied: Employees can only view their own leave records.', [], 403);
+      }
+      query.employeeId = req.verifiedEmployeeId;
     }
 
-    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 200 });
+
     const [total, requests] = await Promise.all([
       LeaveRequest.countDocuments(query),
       LeaveRequest.find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(parseInt(limit, 10))
+        .limit(limit)
         .populate('employeeId', 'firstName lastName employeeId departmentId')
         .populate('leaveTypeId', 'name code isPaid')
         .populate('reviewedBy', 'email')
@@ -280,11 +307,7 @@ export const getLeaveRequests = async (req, res, next) => {
 
     return sendSuccess(res, 'Leave requests retrieved.', {
       requests,
-      pagination: {
-        total,
-        page: parseInt(page, 10),
-        pages: Math.ceil(total / parseInt(limit, 10)),
-      },
+      pagination: buildPaginationMeta(total, page, limit),
     });
   } catch (error) {
     next(error);
@@ -297,26 +320,39 @@ export const getLeaveRequests = async (req, res, next) => {
 export const getLeaveRequestById = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid leave request ID format.', [], 400);
+    }
 
     const leaveRequest = await LeaveRequest.findById(id)
       .populate('employeeId', 'firstName lastName employeeId departmentId managerId')
       .populate('leaveTypeId', 'name code isPaid')
-      .populate('reviewedBy', 'email');
+      .populate('reviewedBy', 'email')
+      .lean();
 
     if (!leaveRequest) {
       return sendError(res, 'Leave request not found.', [], 404);
     }
 
     // Role-based authorization check
-    if (req.user.role === ROLES.EMPLOYEE) {
-      if (!req.verifiedEmployeeId || leaveRequest.employeeId._id.toString() !== req.verifiedEmployeeId.toString()) {
+    if (!isAdminOrHR(req.user.role)) {
+      const targetEmpId = leaveRequest.employeeId?._id?.toString();
+      const isOwn = req.verifiedEmployeeId && targetEmpId === req.verifiedEmployeeId.toString();
+
+      if (req.user.role === ROLES.MANAGER) {
+        const isReport =
+          req.verifiedEmployeeId &&
+          leaveRequest.employeeId?.managerId?.toString() === req.verifiedEmployeeId.toString();
+        if (!isOwn && !isReport) {
+          return sendError(
+            res,
+            'Access denied: You can only view leave requests for yourself and your direct reports.',
+            [],
+            403
+          );
+        }
+      } else if (!isOwn) {
         return sendError(res, "Access denied: You cannot view another employee's leave request.", [], 403);
-      }
-    } else if (req.user.role === ROLES.MANAGER) {
-      const isOwn = req.verifiedEmployeeId && leaveRequest.employeeId._id.toString() === req.verifiedEmployeeId.toString();
-      const isReport = req.verifiedEmployeeId && leaveRequest.employeeId.managerId?.toString() === req.verifiedEmployeeId.toString();
-      if (!isOwn && !isReport) {
-        return sendError(res, 'Access denied: You can only view leave requests for yourself and your direct reports.', [], 403);
       }
     }
 
@@ -332,17 +368,20 @@ export const getLeaveRequestById = async (req, res, next) => {
 export const cancelLeaveRequest = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid leave request ID format.', [], 400);
+    }
 
     const leaveRequest = await LeaveRequest.findById(id);
     if (!leaveRequest) {
       return sendError(res, 'Leave request not found.', [], 404);
     }
 
-    // Only applicant or admin can cancel
-    if (req.user.role === ROLES.EMPLOYEE) {
-      if (!req.verifiedEmployeeId || leaveRequest.employeeId.toString() !== req.verifiedEmployeeId.toString()) {
-        return sendError(res, 'Access denied: You can only cancel your own leave requests.', [], 403);
-      }
+    // Strict ownership: Only applicant or Admin/HR can cancel
+    const isOwner =
+      req.verifiedEmployeeId && leaveRequest.employeeId.toString() === req.verifiedEmployeeId.toString();
+    if (!isOwner && !isAdminOrHR(req.user.role)) {
+      return sendError(res, 'Access denied: You can only cancel your own leave requests.', [], 403);
     }
 
     if (leaveRequest.status !== LEAVE_STATUS.PENDING) {
@@ -407,7 +446,9 @@ export const reviewLeaveRequest = async (req, res, next) => {
 
     // Managers can only approve requests for their direct reports
     if (req.user.role === ROLES.MANAGER) {
-      const applicant = await Employee.findById(leaveRequest.employeeId);
+      const applicant = await Employee.findById(leaveRequest.employeeId)
+        .select('managerId')
+        .lean();
       if (
         !applicant ||
         !applicant.managerId ||
