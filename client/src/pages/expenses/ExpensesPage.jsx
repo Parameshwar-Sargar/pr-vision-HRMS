@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
-import api from '../../services/api';
+import api, { downloadAuthenticatedFile } from '../../services/api';
 import { toast } from 'react-hot-toast';
 import {
   Receipt,
   Plus,
-  CheckCircle,
-  XCircle,
-  Clock,
-  DollarSign,
-  FileText,
-  Filter,
+  Download,
 } from 'lucide-react';
+
+const getInitialClaimState = () => ({
+  title: '',
+  category: 'Travel',
+  amount: '',
+  date: new Date().toISOString().split('T')[0],
+  description: '',
+});
 
 export default function ExpensesPage() {
   const { user } = useSelector((state) => state.auth);
@@ -19,15 +22,17 @@ export default function ExpensesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [showApplyModal, setShowApplyModal] = useState(false);
 
-  const [newClaim, setNewClaim] = useState({
-    title: '',
-    category: 'Travel',
-    amount: '',
-    date: new Date().toISOString().split('T')[0],
-    description: '',
-  });
+  const [newClaim, setNewClaim] = useState(getInitialClaimState);
+  const [receiptFile, setReceiptFile] = useState(null);
 
-  const canApprove = ['ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN', 'MANAGER'].includes(user?.role);
+  const canApprove = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN', 'MANAGER'].includes(user?.role);
+  const canReimburse = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN'].includes(user?.role);
+  const isAdminOrHR = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER'].includes(user?.role);
+
+  const resetClaimForm = () => {
+    setNewClaim(getInitialClaimState());
+    setReceiptFile(null);
+  };
 
   const fetchClaims = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
@@ -51,12 +56,27 @@ export default function ExpensesPage() {
   const handleSubmitClaim = async (e) => {
     e.preventDefault();
     try {
-      const res = await api.post('/expenses', newClaim);
+      let payload = newClaim;
+      let config = {};
+      if (receiptFile) {
+        const formData = new FormData();
+        formData.append('title', newClaim.title);
+        formData.append('category', newClaim.category);
+        formData.append('amount', String(newClaim.amount));
+        formData.append('date', newClaim.date);
+        formData.append('description', newClaim.description || '');
+        formData.append('receipt', receiptFile);
+        payload = formData;
+        config = { headers: { 'Content-Type': 'multipart/form-data' } };
+      }
+
+      const res = await api.post('/expenses', payload, config);
       const created = res?.data?.claim || res?.claim;
       if (created) {
         setClaims((prev) => [created, ...prev]);
       }
       toast.success('Expense claim submitted successfully!');
+      resetClaimForm();
       setShowApplyModal(false);
       fetchClaims(false);
     } catch (err) {
@@ -71,8 +91,20 @@ export default function ExpensesPage() {
       toast.success(`Claim ${status.toLowerCase()}!`);
       fetchClaims(false);
     } catch (err) {
-      toast.error('Failed to update status.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to update status.');
       fetchClaims(false);
+    }
+  };
+
+  const handleDownloadReceipt = async (claim) => {
+    try {
+      const safeTitle = (claim.title || 'expense-receipt').replace(/[^a-zA-Z0-9._-]+/g, '-');
+      const rawName = claim.receiptUrl ? String(claim.receiptUrl).replace(/^receipt:/, '') : '';
+      const extMatch = rawName.match(/\.[a-zA-Z0-9]+$/);
+      const filename = `${safeTitle}${extMatch ? extMatch[0] : ''}`;
+      await downloadAuthenticatedFile(`/expenses/${claim._id}/receipt`, filename);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to download receipt.');
     }
   };
 
@@ -148,21 +180,42 @@ export default function ExpensesPage() {
                   </span>
                 </td>
                 <td className="py-3 px-4 text-right space-x-2">
-                  {canApprove && c.status === 'Pending' && (
+                  {c.receiptUrl && (
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadReceipt(c)}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-600 hover:text-slate-900"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Receipt</span>
+                    </button>
+                  )}
+                  {canApprove && c.status === 'Pending' && (isAdminOrHR || c.employeeId?._id !== user?.employeeId) && (
                     <>
                       <button
+                        type="button"
                         onClick={() => handleReview(c._id, 'Approved')}
                         className="text-[11px] font-bold text-emerald-600 hover:text-emerald-800"
                       >
                         Approve
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleReview(c._id, 'Rejected')}
                         className="text-[11px] font-bold text-rose-600 hover:text-rose-800"
                       >
                         Reject
                       </button>
                     </>
+                  )}
+                  {canReimburse && c.status === 'Approved' && (isAdminOrHR || c.employeeId?._id !== user?.employeeId) && (
+                    <button
+                      type="button"
+                      onClick={() => handleReview(c._id, 'Reimbursed')}
+                      className="text-[11px] font-bold text-blue-600 hover:text-blue-800"
+                    >
+                      Mark Reimbursed
+                    </button>
                   )}
                 </td>
               </tr>
@@ -209,6 +262,7 @@ export default function ExpensesPage() {
                     <option value="Lodging / Accommodation">Lodging</option>
                     <option value="Transport & Fuel">Transport & Fuel</option>
                     <option value="Office Supplies">Office Supplies</option>
+                    <option value="Client Entertainment">Client Entertainment</option>
                     <option value="Other">Other</option>
                   </select>
                 </div>
@@ -248,10 +302,23 @@ export default function ExpensesPage() {
                 />
               </div>
 
+              <div>
+                <label className="font-bold text-slate-700">Receipt Attachment (Optional)</label>
+                <input
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp"
+                  onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                  className="mt-1 w-full border border-slate-300 rounded-lg p-1.5 text-[11px] bg-white"
+                />
+              </div>
+
               <div className="flex justify-end gap-2 pt-3">
                 <button
                   type="button"
-                  onClick={() => setShowApplyModal(false)}
+                  onClick={() => {
+                    setShowApplyModal(false);
+                    resetClaimForm();
+                  }}
                   className="px-4 py-2 border border-slate-300 rounded-lg font-bold text-slate-700 hover:bg-slate-50"
                 >
                   Cancel

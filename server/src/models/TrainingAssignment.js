@@ -39,6 +39,9 @@ const trainingAssignmentSchema = new mongoose.Schema(
 );
 
 trainingAssignmentSchema.index({ programId: 1, employeeId: 1 }, { unique: true });
+trainingAssignmentSchema.index({ createdAt: -1 });
+trainingAssignmentSchema.index({ employeeId: 1, createdAt: -1 });
+trainingAssignmentSchema.index({ programId: 1, createdAt: -1 });
 
 export default mongoose.model('TrainingAssignment', trainingAssignmentSchema);
 

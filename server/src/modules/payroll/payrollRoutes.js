@@ -7,6 +7,8 @@ import {
   markPayrollPaid,
   getPayslips,
   downloadPayslipPDF,
+  getPayrollAdjustments,
+  reviewPayrollAdjustment,
 } from './payrollController.js';
 import { authenticate } from '../../middleware/authMiddleware.js';
 import { requireRoles } from '../../middleware/roleMiddleware.js';
@@ -48,5 +50,13 @@ router.patch(
 // Payslips (Employees see own; Admin/HR/Payroll see all)
 router.get('/payslips', getPayslips);
 router.get('/payslips/:id/pdf', downloadPayslipPDF);
+
+// Future Payroll Adjustments (locked-payroll leave reversals / recoveries)
+router.get('/adjustments', getPayrollAdjustments);
+router.patch(
+  '/adjustments/:id',
+  requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.PAYROLL_ADMIN),
+  reviewPayrollAdjustment
+);
 
 export default router;

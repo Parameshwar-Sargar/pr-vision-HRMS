@@ -17,8 +17,10 @@ import {
 
 export default function PayrollPage() {
   const { user } = useSelector((state) => state.auth);
+  const [activeTab, setActiveTab] = useState('payroll');
   const [runs, setRuns] = useState([]);
   const [payslips, setPayslips] = useState([]);
+  const [adjustments, setAdjustments] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Run modal
@@ -27,13 +29,40 @@ export default function PayrollPage() {
   const [runYear, setRunYear] = useState(new Date().getFullYear());
   const [processing, setProcessing] = useState(false);
 
-  const isAdminOrHR = user?.role === 'ADMIN' || user?.role === 'COMPANY_ADMIN' || user?.role === 'HR_MANAGER' || user?.role === 'PAYROLL_ADMIN';
+  const isAdminOrHR = ['SUPER_ADMIN', 'ADMIN', 'COMPANY_ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN'].includes(user?.role);
 
   useEffect(() => {
     const controller = new AbortController();
     fetchPayrollData(controller.signal);
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'adjustments' || !isAdminOrHR) return;
+    const controller = new AbortController();
+    fetchAdjustments(controller.signal);
+    return () => controller.abort();
+  }, [activeTab]);
+
+  const fetchAdjustments = async (signal = null) => {
+    try {
+      const res = await api.get('/payroll/adjustments', { signal, cacheTtl: 10000 });
+      setAdjustments(res.data?.adjustments || res.adjustments || []);
+    } catch (err) {
+      if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
+      toast.error('Failed to load payroll adjustments');
+    }
+  };
+
+  const handleReviewAdjustment = async (adjId, status) => {
+    try {
+      await api.patch(`/payroll/adjustments/${adjId}`, { status });
+      toast.success(`Payroll adjustment ${status.toLowerCase()}.`);
+      fetchAdjustments();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to update adjustment');
+    }
+  };
 
   const fetchPayrollData = async (signal = null) => {
     try {
@@ -112,6 +141,104 @@ export default function PayrollPage() {
           </button>
         )}
       </div>
+
+      {isAdminOrHR && (
+        <div className="flex border-b border-slate-200 text-xs font-bold text-slate-600 space-x-6">
+          <button
+            type="button"
+            onClick={() => setActiveTab('payroll')}
+            className={`pb-3 border-b-2 transition-colors ${
+              activeTab === 'payroll' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-900'
+            }`}
+          >
+            Payroll Runs &amp; Payslips
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('adjustments')}
+            className={`pb-3 border-b-2 transition-colors ${
+              activeTab === 'adjustments' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-900'
+            }`}
+          >
+            Future Payroll Adjustments
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'adjustments' && isAdminOrHR ? (
+        <div className="p-6 rounded-2xl bg-white border border-slate-200 shadow-sm">
+          <h3 className="text-base font-bold text-slate-900 mb-2">Pending &amp; Processed Payroll Adjustments</h3>
+          <p className="text-xs text-slate-500 mb-4">
+            Safe adjustment queue for approved leaves cancelled after payroll lock/payment. Historical payslips remain unmodified.
+          </p>
+          {adjustments.length === 0 ? (
+            <div className="p-8 text-center text-xs text-slate-400">No future payroll adjustments queued.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-y border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Employee</th>
+                    <th className="py-3 px-4">Locked Period</th>
+                    <th className="py-3 px-4">Type</th>
+                    <th className="py-3 px-4">Days / Amount</th>
+                    <th className="py-3 px-4">Reason</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {adjustments.map((adj) => (
+                    <tr key={adj._id} className="hover:bg-slate-50">
+                      <td className="py-3.5 px-4 font-bold text-slate-900">
+                        {adj.employeeId?.firstName} {adj.employeeId?.lastName}
+                      </td>
+                      <td className="py-3.5 px-4 font-semibold text-slate-700">
+                        {adj.sourceMonth} / {adj.sourceYear}
+                      </td>
+                      <td className="py-3.5 px-4 font-bold">
+                        <span className={adj.adjustmentType === 'CREDIT' ? 'text-emerald-700' : 'text-rose-700'}>
+                          {adj.adjustmentType}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 font-bold text-slate-800">
+                        {adj.days}d • ₹ {adj.amount?.toLocaleString('en-IN')}
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-600 max-w-xs truncate">{adj.reason}</td>
+                      <td className="py-3.5 px-4">
+                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-800">
+                          {adj.status}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-right space-x-2">
+                        {adj.status === 'Pending' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleReviewAdjustment(adj._id, 'Approved')}
+                              className="px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 font-bold"
+                            >
+                              Approve for Next Run
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleReviewAdjustment(adj._id, 'Waived')}
+                              className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300 font-bold"
+                            >
+                              Waive
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
 
       {/* Admin/HR Payroll Batches */}
       {isAdminOrHR && runs.length > 0 && (
@@ -193,6 +320,7 @@ export default function PayrollPage() {
                   <th className="py-3 px-4">Payslip #</th>
                   <th className="py-3 px-4">Employee</th>
                   <th className="py-3 px-4">Month/Year</th>
+                  <th className="py-3 px-4">Paid / Working Days</th>
                   <th className="py-3 px-4">Gross Earnings</th>
                   <th className="py-3 px-4">Deductions</th>
                   <th className="py-3 px-4">Net Salary</th>
@@ -216,6 +344,14 @@ export default function PayrollPage() {
                     </td>
                     <td className="py-3.5 px-4 font-semibold text-slate-700">
                       {ps.month} / {ps.year}
+                    </td>
+                    <td className="py-3.5 px-4 font-semibold text-slate-700">
+                      {ps.presentDays} / {ps.workingDays}
+                      {ps.lopDays > 0 && (
+                        <span className="block text-[10px] font-bold text-rose-600">
+                          LOP: {ps.lopDays}d
+                        </span>
+                      )}
                     </td>
                     <td className="py-3.5 px-4 font-semibold text-slate-700">
                       ₹ {ps.grossSalary?.toLocaleString('en-IN')}
@@ -253,6 +389,8 @@ export default function PayrollPage() {
           </div>
         )}
       </div>
+        </>
+      )}
 
       {/* Process Payroll Modal */}
       {showRunModal && (
@@ -304,7 +442,7 @@ export default function PayrollPage() {
               </div>
 
               <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-blue-900 text-[11px]">
-                Calculates earnings, statutory PF (12%), PT, TDS, and generates individual payslip PDFs for all active employees.
+                Calculates prorated earnings from actual working days, holidays & LOP attendance alongside PF, ESI, PT, and TDS for all eligible staff.
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">

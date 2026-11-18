@@ -279,3 +279,31 @@ export const validateUploadedFileMagicBytes = (filePath, mimeType, originalName 
   return { valid: false, reason: 'Unsupported file format.' };
 };
 
+const FORBIDDEN_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+export const stripUnsafeKeys = (value) => {
+  if (Array.isArray(value)) {
+    for (const item of value) stripUnsafeKeys(item);
+    return value;
+  }
+  if (!value || typeof value !== 'object' || value instanceof Date || Buffer.isBuffer(value)) {
+    return value;
+  }
+  for (const key of Object.keys(value)) {
+    if (key.startsWith('$') || FORBIDDEN_OBJECT_KEYS.has(key)) {
+      delete value[key];
+    } else {
+      stripUnsafeKeys(value[key]);
+    }
+  }
+  return value;
+};
+
+export const sanitizeRequestInputs = (req, _res, next) => {
+  if (req.body && typeof req.body === 'object') stripUnsafeKeys(req.body);
+  if (req.query && typeof req.query === 'object') stripUnsafeKeys(req.query);
+  if (req.params && typeof req.params === 'object') stripUnsafeKeys(req.params);
+  next();
+};
+
+

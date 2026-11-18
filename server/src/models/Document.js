@@ -57,5 +57,8 @@ const documentSchema = new mongoose.Schema(
 
 documentSchema.index({ employeeId: 1 });
 documentSchema.index({ category: 1 });
+documentSchema.index({ createdAt: -1 });
+documentSchema.index({ employeeId: 1, createdAt: -1 });
+documentSchema.index({ category: 1, createdAt: -1 });
 
 export default mongoose.model('Document', documentSchema);

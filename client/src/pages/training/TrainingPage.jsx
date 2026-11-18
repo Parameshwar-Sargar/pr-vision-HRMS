@@ -1,18 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import api from '../../services/api';
+import useEmployeeOptions from '../../hooks/useEmployeeOptions';
+import EmployeeOptionPicker from '../../components/common/EmployeeOptionPicker';
 import { toast } from 'react-hot-toast';
 import {
   GraduationCap,
   Plus,
   BookOpen,
-  Calendar,
   Clock,
   UserCheck,
-  CheckCircle2,
-  AlertCircle,
+  Users,
   Video,
+  X,
 } from 'lucide-react';
+
+const getInitialProgram = () => ({
+  title: '',
+  category: 'Technical',
+  trainerName: '',
+  description: '',
+  startDate: '',
+  endDate: '',
+  durationHours: 8,
+  mode: 'Online',
+});
 
 export default function TrainingPage() {
   const { user } = useSelector((state) => state.auth);
@@ -22,19 +34,25 @@ export default function TrainingPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
 
-  // Form
-  const [newProgram, setNewProgram] = useState({
-    title: '',
-    category: 'Technical',
-    trainerName: '',
-    description: '',
-    startDate: '',
-    endDate: '',
-    durationHours: 8,
-    mode: 'Online',
-  });
+  // Enroll Modal
+  const [enrollProgram, setEnrollProgram] = useState(null);
+  const [selectedEmpIds, setSelectedEmpIds] = useState([]);
 
-  const canManage = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
+  // Progress Modal
+  const [progressTarget, setProgressTarget] = useState(null);
+  const [progressForm, setProgressForm] = useState({ status: 'Completed', score: 100, feedback: '' });
+
+  // Form
+  const [newProgram, setNewProgram] = useState(getInitialProgram);
+
+  const canManage = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER'].includes(user?.role);
+  const canEnroll = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER', 'MANAGER'].includes(user?.role);
+
+  const empOptions = useEmployeeOptions({
+    enabled: Boolean(enrollProgram && canEnroll),
+    includeSelf: true,
+    limit: 20,
+  });
 
   const fetchTrainingData = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
@@ -47,7 +65,7 @@ export default function TrainingPage() {
       setAssignments(assignRes.data?.assignments || assignRes.assignments || []);
     } catch (err) {
       if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
-      toast.error('Failed to load training data.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to load training data.');
     } finally {
       setIsLoading(false);
     }
@@ -57,10 +75,13 @@ export default function TrainingPage() {
     const controller = new AbortController();
     fetchTrainingData(true, controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [canEnroll]);
 
   const handleCreateProgram = async (e) => {
     e.preventDefault();
+    if (newProgram.startDate && newProgram.endDate && newProgram.endDate < newProgram.startDate) {
+      return toast.error('End date cannot be earlier than start date.');
+    }
     try {
       const res = await api.post('/training/programs', newProgram);
       const created = res?.data?.program || res?.program;
@@ -69,26 +90,46 @@ export default function TrainingPage() {
       }
       toast.success('Training program created successfully!');
       setShowAddModal(false);
+      setNewProgram(getInitialProgram());
       fetchTrainingData(false);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to create program.');
     }
   };
 
-  const handleMarkCompleted = async (assignmentId) => {
+  const handleEnrollEmployees = async (e) => {
+    e.preventDefault();
+    if (!enrollProgram || selectedEmpIds.length === 0) {
+      return toast.error('Select at least one employee to enroll.');
+    }
     try {
-      setAssignments((prev) =>
-        prev.map((a) => (a._id === assignmentId ? { ...a, status: 'Completed', score: 100 } : a))
-      );
-      await api.patch(`/training/assignments/${assignmentId}/progress`, {
-        status: 'Completed',
-        score: 100,
-        feedback: 'Completed self-paced training module.',
+      const res = await api.post(`/training/programs/${enrollProgram._id}/assign`, {
+        employeeIds: selectedEmpIds,
       });
-      toast.success('Marked as Completed!');
+      toast.success(res?.message || 'Employees enrolled successfully!');
+      setEnrollProgram(null);
+      setSelectedEmpIds([]);
+      empOptions.clearSearch();
       fetchTrainingData(false);
     } catch (err) {
-      toast.error('Failed to update progress.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to enroll employees.');
+    }
+  };
+
+  const handleProgressSubmit = async (e) => {
+    e.preventDefault();
+    if (!progressTarget) return;
+    try {
+      await api.patch(`/training/assignments/${progressTarget._id}/progress`, {
+        status: progressForm.status,
+        score: progressForm.score !== '' ? Number(progressForm.score) : undefined,
+        feedback: progressForm.feedback,
+      });
+      toast.success(`Training marked as ${progressForm.status}!`);
+      setProgressTarget(null);
+      fetchTrainingData(false);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to update progress.');
       fetchTrainingData(false);
     }
   };
@@ -140,7 +181,7 @@ export default function TrainingPage() {
           }`}
         >
           <UserCheck className="w-4 h-4" />
-          <span>{canManage ? 'All Enrollments' : 'My Enrollments'} ({assignments.length})</span>
+          <span>{canEnroll ? 'Team & Employee Enrollments' : 'My Enrollments'} ({assignments.length})</span>
         </button>
       </div>
 
@@ -185,19 +226,34 @@ export default function TrainingPage() {
                 </div>
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs gap-2">
                 <span className="text-[11px] text-slate-400">
-                  {new Date(p.startDate).toLocaleDateString()}
+                  {new Date(p.startDate).toLocaleDateString()} &rarr; {new Date(p.endDate).toLocaleDateString()}
                 </span>
-                <span
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                    p.status === 'Completed'
-                      ? 'bg-emerald-50 text-emerald-700'
-                      : 'bg-amber-50 text-amber-700'
-                  }`}
-                >
-                  {p.status}
-                </span>
+                <div className="flex items-center gap-2">
+                  {canEnroll && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEnrollProgram(p);
+                        setSelectedEmpIds([]);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 text-[10px] font-bold"
+                    >
+                      <Users className="w-3 h-3" />
+                      <span>Enroll</span>
+                    </button>
+                  )}
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      p.status === 'Completed'
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-amber-50 text-amber-700'
+                    }`}
+                  >
+                    {p.status}
+                  </span>
+                </div>
               </div>
             </div>
           ))}
@@ -244,10 +300,18 @@ export default function TrainingPage() {
                   <td className="py-3 px-4 text-right">
                     {a.status !== 'Completed' && (
                       <button
-                        onClick={() => handleMarkCompleted(a._id)}
+                        type="button"
+                        onClick={() => {
+                          setProgressTarget(a);
+                          setProgressForm({
+                            status: 'Completed',
+                            score: a.score ?? 100,
+                            feedback: a.feedback || '',
+                          });
+                        }}
                         className="text-[11px] font-bold text-blue-600 hover:text-blue-800"
                       >
-                        Complete
+                        Update Progress
                       </button>
                     )}
                   </td>
@@ -296,6 +360,7 @@ export default function TrainingPage() {
                     <option value="Leadership">Leadership</option>
                     <option value="Sales">Sales</option>
                     <option value="Soft Skills">Soft Skills</option>
+                    <option value="Product Training">Product Training</option>
                   </select>
                 </div>
                 <div>
@@ -372,7 +437,10 @@ export default function TrainingPage() {
               <div className="flex justify-end gap-2 pt-3">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setNewProgram(getInitialProgram());
+                  }}
                   className="px-4 py-2 border border-slate-300 rounded-lg font-bold text-slate-700 hover:bg-slate-50"
                 >
                   Cancel
@@ -382,6 +450,110 @@ export default function TrainingPage() {
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg"
                 >
                   Create Program
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Enroll Employees Modal */}
+      {enrollProgram && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h2 className="text-sm font-bold text-slate-900">Enroll Staff in {enrollProgram.title}</h2>
+              <button type="button" onClick={() => setEnrollProgram(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleEnrollEmployees} className="mt-4 space-y-3 text-xs">
+              <EmployeeOptionPicker
+                mode="multi"
+                label="Select Employees"
+                value={selectedEmpIds}
+                onChange={setSelectedEmpIds}
+                employeeOptions={empOptions}
+              />
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEnrollProgram(null)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg"
+                >
+                  Enroll Selected ({selectedEmpIds.length})
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Update Training Progress Modal */}
+      {progressTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h2 className="text-sm font-bold text-slate-900">
+                Update Progress — {progressTarget.programId?.title}
+              </h2>
+              <button type="button" onClick={() => setProgressTarget(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleProgressSubmit} className="mt-4 space-y-3 text-xs">
+              <div>
+                <label className="font-bold text-slate-700">Status</label>
+                <select
+                  value={progressForm.status}
+                  onChange={(e) => setProgressForm({ ...progressForm, status: e.target.value })}
+                  className="mt-1 w-full border border-slate-300 rounded-lg p-2 bg-white"
+                >
+                  <option value="Enrolled">Enrolled</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="Completed">Completed</option>
+                  <option value="Dropped">Dropped</option>
+                </select>
+              </div>
+              <div>
+                <label className="font-bold text-slate-700">Assessment Score (0–100)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={progressForm.score}
+                  onChange={(e) => setProgressForm({ ...progressForm, score: e.target.value })}
+                  className="mt-1 w-full border border-slate-300 rounded-lg p-2"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700">Feedback / Notes</label>
+                <textarea
+                  rows={2}
+                  value={progressForm.feedback}
+                  onChange={(e) => setProgressForm({ ...progressForm, feedback: e.target.value })}
+                  className="mt-1 w-full border border-slate-300 rounded-lg p-2"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setProgressTarget(null)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg"
+                >
+                  Save Progress
                 </button>
               </div>
             </form>

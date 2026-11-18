@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import api from '../../services/api';
+import useEmployeeOptions from '../../hooks/useEmployeeOptions';
+import EmployeeOptionPicker from '../../components/common/EmployeeOptionPicker';
 import { toast } from 'react-hot-toast';
 import {
   Laptop,
@@ -12,39 +14,48 @@ import {
   UserCheck,
 } from 'lucide-react';
 
+const getInitialAsset = () => ({
+  assetTag: '',
+  name: '',
+  category: 'Laptop',
+  serialNumber: '',
+  purchaseCost: '',
+  condition: 'Good',
+});
+
 export default function AssetsPage() {
   const { user } = useSelector((state) => state.auth);
   const [assets, setAssets] = useState([]);
-  const [employees, setEmployees] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [assignModalAsset, setAssignModalAsset] = useState(null);
   const [selectedEmpId, setSelectedEmpId] = useState('');
+  const [assignCondition, setAssignCondition] = useState('Good');
+  const [assignNotes, setAssignNotes] = useState('');
+  const [returnModalAsset, setReturnModalAsset] = useState(null);
+  const [returnCondition, setReturnCondition] = useState('Good');
+  const [returnRemarks, setReturnRemarks] = useState('');
 
-  const [newAsset, setNewAsset] = useState({
-    assetTag: '',
-    name: '',
-    category: 'Laptop',
-    serialNumber: '',
-    purchaseCost: '',
-    condition: 'Good',
+  const [newAsset, setNewAsset] = useState(getInitialAsset);
+
+  const canManage = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER'].includes(user?.role);
+
+  const empOptions = useEmployeeOptions({
+    enabled: Boolean(assignModalAsset && canManage),
+    limit: 20,
   });
 
-  const canManage = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
+  useEffect(() => {
+    if (assignModalAsset && !selectedEmpId && empOptions.options.length > 0) {
+      setSelectedEmpId(empOptions.options[0]._id);
+    }
+  }, [assignModalAsset, selectedEmpId, empOptions.options]);
 
   const fetchAssetsData = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
     try {
-      const [astRes, empRes] = await Promise.all([
-        api.get('/assets', { signal, cacheTtl: 10000 }),
-        canManage
-          ? api
-              .get('/employees', { params: { limit: 100 }, signal, cacheTtl: 60000 })
-              .catch(() => ({ data: { employees: [] } }))
-          : Promise.resolve({ data: { employees: [] } }),
-      ]);
+      const astRes = await api.get('/assets', { signal, cacheTtl: 10000 });
       setAssets(astRes.data?.assets || astRes.assets || []);
-      setEmployees(empRes.data?.employees || empRes.employees || []);
     } catch (err) {
       if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
       toast.error('Failed to load assets.');
@@ -69,6 +80,7 @@ export default function AssetsPage() {
       }
       toast.success('Asset added to inventory!');
       setShowAddModal(false);
+      setNewAsset(getInitialAsset());
       fetchAssetsData(false);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to register asset.');
@@ -81,26 +93,35 @@ export default function AssetsPage() {
     try {
       await api.post(`/assets/${assignModalAsset._id}/assign`, {
         employeeId: selectedEmpId,
+        conditionAtAssignment: assignCondition,
+        notes: assignNotes,
       });
       toast.success('Asset assigned successfully!');
       setAssignModalAsset(null);
+      setSelectedEmpId('');
+      setAssignNotes('');
+      empOptions.clearSearch();
       fetchAssetsData(false);
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to assign asset.');
     }
   };
 
-  const handleReturnAsset = async (assetId) => {
-    if (!window.confirm('Confirm returning this asset to inventory?')) return;
+  const handleReturnAsset = async (e) => {
+    e.preventDefault();
+    if (!returnModalAsset) return;
     try {
-      setAssets((prev) =>
-        prev.map((a) => (a._id === assetId ? { ...a, status: 'Available', currentAssignedTo: null } : a))
-      );
-      await api.post(`/assets/${assetId}/return`, { conditionAtReturn: 'Good' });
-      toast.success('Asset returned and available!');
+      await api.post(`/assets/${returnModalAsset._id}/return`, {
+        conditionAtReturn: returnCondition,
+        remarks: returnRemarks,
+      });
+      toast.success('Asset return recorded!');
+      setReturnModalAsset(null);
+      setReturnCondition('Good');
+      setReturnRemarks('');
       fetchAssetsData(false);
     } catch (err) {
-      toast.error('Failed to return asset.');
+      toast.error(err.response?.data?.message || err.message || 'Failed to return asset.');
       fetchAssetsData(false);
     }
   };
@@ -193,7 +214,9 @@ export default function AssetsPage() {
                     <button
                       onClick={() => {
                         setAssignModalAsset(ast);
-                        setSelectedEmpId(employees[0]?._id || '');
+                        setSelectedEmpId((prev) => prev || empOptions.options[0]?._id || '');
+                        setAssignCondition(ast.condition || 'Good');
+                        setAssignNotes('');
                       }}
                       className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800"
                     >
@@ -202,7 +225,11 @@ export default function AssetsPage() {
                   )}
                   {canManage && ast.status === 'Assigned' && (
                     <button
-                      onClick={() => handleReturnAsset(ast._id)}
+                      onClick={() => {
+                        setReturnModalAsset(ast);
+                        setReturnCondition('Good');
+                        setReturnRemarks('');
+                      }}
                       className="text-[11px] font-bold text-amber-600 hover:text-amber-800 flex items-center gap-1 inline-flex"
                     >
                       <RotateCcw className="w-3 h-3" />
@@ -323,19 +350,36 @@ export default function AssetsPage() {
             </p>
 
             <form onSubmit={handleAssignAsset} className="space-y-4 text-xs">
+              <EmployeeOptionPicker
+                mode="single"
+                label="Select Employee"
+                value={selectedEmpId}
+                onChange={setSelectedEmpId}
+                employeeOptions={empOptions}
+              />
+
               <div>
-                <label className="font-bold text-slate-700">Select Employee</label>
+                <label className="font-bold text-slate-700">Condition at Assignment</label>
                 <select
-                  value={selectedEmpId}
-                  onChange={(e) => setSelectedEmpId(e.target.value)}
+                  value={assignCondition}
+                  onChange={(e) => setAssignCondition(e.target.value)}
                   className="mt-1 w-full border border-slate-300 rounded-lg p-2 bg-white"
                 >
-                  {employees.map((emp) => (
-                    <option key={emp._id} value={emp._id}>
-                      {emp.firstName} {emp.lastName} ({emp.employeeId})
-                    </option>
-                  ))}
+                  <option value="New">New</option>
+                  <option value="Good">Good</option>
+                  <option value="Fair">Fair</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700">Handover Notes</label>
+                <input
+                  type="text"
+                  value={assignNotes}
+                  onChange={(e) => setAssignNotes(e.target.value)}
+                  placeholder="Charger, bag, accessories..."
+                  className="mt-1 w-full border border-slate-300 rounded-lg p-2"
+                />
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -351,6 +395,59 @@ export default function AssetsPage() {
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg"
                 >
                   Confirm Allocation
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Return Modal */}
+      {returnModalAsset && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200">
+            <h2 className="text-base font-bold text-slate-900 mb-2">Return Equipment</h2>
+            <p className="text-xs text-slate-500 mb-4">
+              Record return inspection for <span className="font-bold text-slate-800">{returnModalAsset.name}</span> ({returnModalAsset.assetTag}).
+            </p>
+            <form onSubmit={handleReturnAsset} className="space-y-4 text-xs">
+              <div>
+                <label className="font-bold text-slate-700">Condition at Return</label>
+                <select
+                  value={returnCondition}
+                  onChange={(e) => setReturnCondition(e.target.value)}
+                  className="mt-1 w-full border border-slate-300 rounded-lg p-2 bg-white"
+                >
+                  <option value="Good">Good (Available)</option>
+                  <option value="Fair">Fair (Available)</option>
+                  <option value="New">New (Available)</option>
+                  <option value="Needs Maintenance">Needs Maintenance (Under Repair)</option>
+                  <option value="Retired">Retired (Decommissioned)</option>
+                </select>
+              </div>
+              <div>
+                <label className="font-bold text-slate-700">Inspection Remarks</label>
+                <input
+                  type="text"
+                  value={returnRemarks}
+                  onChange={(e) => setReturnRemarks(e.target.value)}
+                  placeholder="Condition check remarks..."
+                  className="mt-1 w-full border border-slate-300 rounded-lg p-2"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setReturnModalAsset(null)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg"
+                >
+                  Confirm Return
                 </button>
               </div>
             </form>

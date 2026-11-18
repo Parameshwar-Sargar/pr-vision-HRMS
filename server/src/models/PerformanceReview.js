@@ -89,5 +89,8 @@ const performanceReviewSchema = new mongoose.Schema(
 
 performanceReviewSchema.index({ employeeId: 1, reviewCycle: 1 }, { unique: true });
 performanceReviewSchema.index({ status: 1 });
+performanceReviewSchema.index({ createdAt: -1 });
+performanceReviewSchema.index({ employeeId: 1, createdAt: -1 });
+performanceReviewSchema.index({ status: 1, createdAt: -1 });
 
 export default mongoose.model('PerformanceReview', performanceReviewSchema);

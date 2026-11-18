@@ -123,8 +123,12 @@ export const createBranch = async (req, res, next) => {
     if (!name || !code) {
       return sendError(res, 'Branch name and code are required.', [], 400);
     }
+    if (!address?.city?.trim() || !address?.state?.trim()) {
+      return sendError(res, 'Branch city and state are required.', [], 400);
+    }
 
-    const exists = await Branch.findOne({ code: String(code).trim().toUpperCase(), isDeleted: false }).select('_id').lean();
+    const normalizedCode = String(code).trim().toUpperCase();
+    const exists = await Branch.findOne({ code: normalizedCode, isDeleted: false }).select('_id').lean();
     if (exists) {
       return sendError(res, 'A branch with this code already exists.', [], 409);
     }
@@ -135,11 +139,17 @@ export const createBranch = async (req, res, next) => {
 
     const branch = await Branch.create({
       name: String(name).trim(),
-      code: String(code).trim().toUpperCase(),
+      code: normalizedCode,
       isHeadquarters: !!isHeadquarters,
-      address,
-      contactPhone,
-      contactEmail,
+      address: {
+        street: address.street || '',
+        city: address.city.trim(),
+        state: address.state.trim(),
+        country: address.country || 'India',
+        postalCode: address.postalCode || '',
+      },
+      contactPhone: contactPhone || '',
+      contactEmail: contactEmail || '',
       timezone: timezone || 'Asia/Kolkata',
     });
 
@@ -171,14 +181,44 @@ export const updateBranch = async (req, res, next) => {
 
     const { name, code, isHeadquarters, address, contactPhone, contactEmail, timezone } = req.body;
 
+    if (code !== undefined) {
+      const normalizedCode = String(code).trim().toUpperCase();
+      if (!normalizedCode) {
+        return sendError(res, 'Branch code cannot be empty.', [], 400);
+      }
+      const duplicate = await Branch.findOne({
+        _id: { $ne: id },
+        code: normalizedCode,
+        isDeleted: false,
+      })
+        .select('_id')
+        .lean();
+      if (duplicate) {
+        return sendError(res, 'Another branch with this code already exists.', [], 409);
+      }
+      branch.code = normalizedCode;
+    }
+
     if (isHeadquarters) {
       await Branch.updateMany({ _id: { $ne: id } }, { isHeadquarters: false });
     }
 
-    if (name !== undefined) branch.name = String(name).trim();
-    if (code !== undefined) branch.code = String(code).trim().toUpperCase();
+    if (name !== undefined) {
+      const trimmedName = String(name).trim();
+      if (!trimmedName) return sendError(res, 'Branch name cannot be empty.', [], 400);
+      branch.name = trimmedName;
+    }
     if (isHeadquarters !== undefined) branch.isHeadquarters = !!isHeadquarters;
-    if (address !== undefined) branch.address = address;
+    if (address !== undefined) {
+      const mergedAddress = {
+        ...(branch.address?.toObject ? branch.address.toObject() : branch.address || {}),
+        ...address,
+      };
+      if (!mergedAddress.city?.trim() || !mergedAddress.state?.trim()) {
+        return sendError(res, 'Branch city and state cannot be empty.', [], 400);
+      }
+      branch.address = mergedAddress;
+    }
     if (contactPhone !== undefined) branch.contactPhone = contactPhone;
     if (contactEmail !== undefined) branch.contactEmail = contactEmail;
     if (timezone !== undefined) branch.timezone = timezone;
@@ -198,13 +238,22 @@ export const deleteBranch = async (req, res, next) => {
       return sendError(res, 'Invalid branch ID.', [], 400);
     }
 
+    const branch = await Branch.findOne({ _id: id, isDeleted: false });
+    if (!branch) return sendError(res, 'Branch not found.', [], 404);
+
+    if (branch.isHeadquarters) {
+      return sendError(
+        res,
+        'Cannot delete the Headquarters branch. Assign another branch as Headquarters first.',
+        [],
+        400
+      );
+    }
+
     const activeStaff = await Employee.countDocuments({ branchId: id, isDeleted: false });
     if (activeStaff > 0) {
       return sendError(res, `Cannot delete branch with ${activeStaff} active staff assigned.`, [], 400);
     }
-
-    const branch = await Branch.findOne({ _id: id, isDeleted: false });
-    if (!branch) return sendError(res, 'Branch not found.', [], 404);
 
     branch.isDeleted = true;
     await branch.save();

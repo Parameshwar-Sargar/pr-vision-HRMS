@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { useSelector } from 'react-redux';
 import { Link } from 'react-router-dom';
 import api from '../../services/api';
@@ -27,16 +27,8 @@ import {
   Layers,
   RefreshCw,
 } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-} from 'recharts';
+
+const AttendanceTrendChart = lazy(() => import('./AttendanceTrendChart'));
 
 const LiveGreeting = React.memo(function LiveGreeting({ userName }) {
   const [hour, setHour] = useState(() => new Date().getHours());
@@ -224,7 +216,7 @@ export default function DashboardPage() {
 
   const role = user?.role || 'EMPLOYEE';
   const kpi = data?.kpi || {};
-  const isAdmin = role === 'ADMIN';
+  const isAdmin = role === 'ADMIN' || role === 'SUPER_ADMIN';
   const isHR = role === 'HR_MANAGER';
   const isManager = role === 'MANAGER';
   const isEmployee = role === 'EMPLOYEE';
@@ -376,24 +368,15 @@ export default function DashboardPage() {
 
               <div className="h-64 w-full">
                 {data?.attendanceTrends && data.attendanceTrends.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data.attendanceTrends}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                      <XAxis dataKey="_id" tick={{ fontSize: 11, fill: '#64748B' }} />
-                      <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#64748B' }} />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#FFFFFF',
-                          borderRadius: '10px',
-                          border: '1px solid #E2E8F0',
-                          fontSize: '11px',
-                        }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar dataKey="present" fill="#2563EB" name="Present" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="late" fill="#F59E0B" name="Late Arrivals" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <Suspense
+                    fallback={
+                      <div className="h-full w-full rounded-xl bg-slate-100 animate-pulse flex items-center justify-center text-xs text-slate-400">
+                        Loading chart...
+                      </div>
+                    }
+                  >
+                    <AttendanceTrendChart data={data.attendanceTrends} />
+                  </Suspense>
                 ) : (
                   <div className="h-full flex items-center justify-center text-xs text-slate-400">
                     No attendance records for the last 7 days.

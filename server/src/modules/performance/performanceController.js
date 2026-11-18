@@ -1,8 +1,44 @@
+import { z } from 'zod';
 import PerformanceReview from '../../models/PerformanceReview.js';
 import Employee from '../../models/Employee.js';
 import { ROLES } from '../../config/constants.js';
 import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 import { isAdminRole, isAdminOrHR, isValidObjectId } from '../../utils/securityUtils.js';
+
+const goalItemSchema = z.object({
+  title: z.string().trim().min(1, 'Goal title is required'),
+  description: z.string().trim().optional().default(''),
+  weightage: z.coerce.number().min(0).max(100).optional().default(0),
+  status: z.enum(['Not Started', 'In Progress', 'Achieved', 'Partially Achieved', 'Missed']).optional().default('Not Started'),
+  progress: z.coerce.number().min(0).max(100).optional().default(0),
+});
+
+const createReviewSchema = z.object({
+  employeeId: z.string().min(1, 'Employee is required'),
+  reviewCycle: z.string().trim().min(2, 'Review cycle is required'),
+  goals: z.array(goalItemSchema).optional().default([]),
+});
+
+const selfReviewSchema = z.object({
+  selfRating: z.coerce.number().min(1).max(5).optional(),
+  goals: z.array(goalItemSchema).optional(),
+  comments: z.string().optional(),
+});
+
+const managerReviewSchema = z.object({
+  managerRating: z.coerce.number().min(1).max(5).optional(),
+  finalScore: z.coerce.number().min(1).max(5).optional(),
+  strengths: z.string().optional(),
+  areasForImprovement: z.string().optional(),
+  comments: z.string().optional(),
+  pipDetails: z
+    .object({
+      isPipRecommended: z.boolean().optional(),
+      durationDays: z.coerce.number().min(0).optional(),
+      improvementTargets: z.string().optional(),
+    })
+    .optional(),
+});
 
 export const getPerformanceReviews = async (req, res, next) => {
   try {
@@ -83,7 +119,8 @@ export const getPerformanceReviews = async (req, res, next) => {
 
 export const createPerformanceReview = async (req, res, next) => {
   try {
-    const { employeeId, reviewCycle, goals } = req.body;
+    const validated = createReviewSchema.parse(req.body);
+    const { employeeId, reviewCycle, goals } = validated;
     if (!isValidObjectId(employeeId)) {
       return sendError(res, 'Invalid employee ID format.', [], 400);
     }
@@ -141,10 +178,14 @@ export const submitEmployeeSelfReview = async (req, res, next) => {
     if (!isValidObjectId(id)) {
       return sendError(res, 'Invalid performance review ID.', [], 400);
     }
-    const { selfRating, goals, comments } = req.body;
+    const validated = selfReviewSchema.parse(req.body);
 
     const review = await PerformanceReview.findById(id);
     if (!review) return sendError(res, 'Review not found.', [], 404);
+
+    if (review.status === 'Completed') {
+      return sendError(res, 'Completed performance reviews cannot be modified.', [], 400);
+    }
 
     const isOwner =
       req.verifiedEmployeeId && review.employeeId.toString() === req.verifiedEmployeeId.toString();
@@ -157,9 +198,9 @@ export const submitEmployeeSelfReview = async (req, res, next) => {
       );
     }
 
-    if (selfRating !== undefined) review.selfRating = selfRating;
-    if (goals !== undefined) review.goals = goals;
-    if (comments !== undefined) review.comments = comments;
+    if (validated.selfRating !== undefined) review.selfRating = validated.selfRating;
+    if (validated.goals !== undefined) review.goals = validated.goals;
+    if (validated.comments !== undefined) review.comments = validated.comments;
     review.status = 'Manager Review Pending';
 
     await review.save();
@@ -175,7 +216,7 @@ export const submitManagerReview = async (req, res, next) => {
     if (!isValidObjectId(id)) {
       return sendError(res, 'Invalid performance review ID.', [], 400);
     }
-    const { managerRating, finalScore, strengths, areasForImprovement, comments, pipDetails } = req.body;
+    const validated = managerReviewSchema.parse(req.body);
 
     const review = await PerformanceReview.findById(id);
     if (!review) return sendError(res, 'Review not found.', [], 404);
@@ -198,12 +239,16 @@ export const submitManagerReview = async (req, res, next) => {
       }
     }
 
-    if (managerRating !== undefined) review.managerRating = managerRating;
-    if (finalScore !== undefined) review.finalScore = finalScore;
-    if (strengths !== undefined) review.strengths = strengths;
-    if (areasForImprovement !== undefined) review.areasForImprovement = areasForImprovement;
-    if (comments !== undefined) review.comments = comments;
-    if (pipDetails !== undefined) review.pipDetails = pipDetails;
+    if (validated.managerRating !== undefined) review.managerRating = validated.managerRating;
+    if (validated.finalScore !== undefined) {
+      review.finalScore = validated.finalScore;
+    } else if (validated.managerRating !== undefined) {
+      review.finalScore = validated.managerRating;
+    }
+    if (validated.strengths !== undefined) review.strengths = validated.strengths;
+    if (validated.areasForImprovement !== undefined) review.areasForImprovement = validated.areasForImprovement;
+    if (validated.comments !== undefined) review.comments = validated.comments;
+    if (validated.pipDetails !== undefined) review.pipDetails = validated.pipDetails;
     review.status = 'Completed';
     review.completedDate = new Date();
 

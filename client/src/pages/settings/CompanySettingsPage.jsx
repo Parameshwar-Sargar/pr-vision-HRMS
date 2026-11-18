@@ -2,7 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
-import { logoutUser, logoutAllSessions } from '../../store/slices/authSlice';
+import { logoutUser, logoutAllSessions, updateCompanyInfo } from '../../store/slices/authSlice';
+import {
+  addBranch,
+  updateBranch as updateBranchAction,
+  removeBranch,
+} from '../../store/slices/masterDataSlice';
 import toast from 'react-hot-toast';
 import {
   Building2,
@@ -11,6 +16,7 @@ import {
   Coins,
   Cpu,
   Plus,
+  Edit2,
   Trash2,
   CheckCircle2,
   Sliders,
@@ -26,13 +32,30 @@ import {
   Globe,
 } from 'lucide-react';
 
+const getInitialBranchForm = () => ({
+  name: '',
+  code: '',
+  isHeadquarters: false,
+  contactPhone: '',
+  contactEmail: '',
+  timezone: 'Asia/Kolkata',
+  address: {
+    street: '',
+    city: '',
+    state: '',
+    country: 'India',
+    postalCode: '',
+  },
+});
+
 export default function CompanySettingsPage() {
   const { user, session: reduxSession, tabId } = useSelector((state) => state.auth);
   const dispatch = useDispatch();
   const location = useLocation();
   const navigate = useNavigate();
 
-  const isAdminOrHR = user?.role === 'ADMIN' || user?.role === 'HR_MANAGER';
+  const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(user?.role);
+  const isAdminOrHR = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER'].includes(user?.role);
   const queryTab = new URLSearchParams(location.search).get('tab');
 
   const [activeTab, setActiveTab] = useState(
@@ -51,23 +74,10 @@ export default function CompanySettingsPage() {
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [revokingId, setRevokingId] = useState(null);
 
-  // New Branch Modal
+  // Branch Create / Edit Modal
   const [showBranchModal, setShowBranchModal] = useState(false);
-  const [branchForm, setBranchForm] = useState({
-    name: '',
-    code: '',
-    isHeadquarters: false,
-    contactPhone: '',
-    contactEmail: '',
-    timezone: 'Asia/Kolkata',
-    address: {
-      street: '',
-      city: '',
-      state: '',
-      country: 'India',
-      postalCode: '',
-    },
-  });
+  const [editingBranch, setEditingBranch] = useState(null);
+  const [branchForm, setBranchForm] = useState(getInitialBranchForm);
 
   useEffect(() => {
     if (queryTab === 'security' || location.pathname === '/security' || !isAdminOrHR) {
@@ -161,6 +171,9 @@ export default function CompanySettingsPage() {
 
   const handleSaveSettings = async (e) => {
     e.preventDefault();
+    if (!isAdmin) {
+      return toast.error('Only Company Administrators can modify global organization settings.');
+    }
     try {
       setSaving(true);
       const res = await api.put('/organization/settings', {
@@ -176,33 +189,67 @@ export default function CompanySettingsPage() {
         modules: company.modules,
         biometricConfig: company.biometricConfig,
       });
-      setCompany(res.data.company);
+      const updatedCompany = res.data.company;
+      setCompany(updatedCompany);
+      if (updatedCompany) {
+        dispatch(updateCompanyInfo(updatedCompany));
+      }
       toast.success('Organization configuration saved successfully!');
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to save settings');
+      toast.error(err.response?.data?.message || err.message || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleCreateBranch = async (e) => {
+  const closeBranchModal = () => {
+    setShowBranchModal(false);
+    setEditingBranch(null);
+    setBranchForm(getInitialBranchForm());
+  };
+
+  const openEditBranch = (branch) => {
+    setEditingBranch(branch);
+    setBranchForm({
+      name: branch.name || '',
+      code: branch.code || '',
+      isHeadquarters: !!branch.isHeadquarters,
+      contactPhone: branch.contactPhone || '',
+      contactEmail: branch.contactEmail || '',
+      timezone: branch.timezone || 'Asia/Kolkata',
+      address: {
+        street: branch.address?.street || '',
+        city: branch.address?.city || '',
+        state: branch.address?.state || '',
+        country: branch.address?.country || 'India',
+        postalCode: branch.address?.postalCode || '',
+      },
+    });
+    setShowBranchModal(true);
+  };
+
+  const handleSaveBranch = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/organization/branches', branchForm);
-      toast.success('New branch registered successfully!');
-      setShowBranchModal(false);
-      setBranchForm({
-        name: '',
-        code: '',
-        isHeadquarters: false,
-        contactPhone: '',
-        contactEmail: '',
-        timezone: 'Asia/Kolkata',
-        address: { street: '', city: '', state: '', country: 'India', postalCode: '' },
-      });
+      if (editingBranch) {
+        const res = await api.put(`/organization/branches/${editingBranch._id}`, branchForm);
+        const updated = res?.data?.branch || res?.branch;
+        if (updated) {
+          dispatch(updateBranchAction(updated));
+        }
+        toast.success('Branch updated successfully!');
+      } else {
+        const res = await api.post('/organization/branches', branchForm);
+        const created = res?.data?.branch || res?.branch;
+        if (created) {
+          dispatch(addBranch(created));
+        }
+        toast.success('New branch registered successfully!');
+      }
+      closeBranchModal();
       fetchOrganizationData();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Branch creation failed');
+      toast.error(err.response?.data?.message || err.message || 'Branch save failed');
     }
   };
 
@@ -214,10 +261,11 @@ export default function CompanySettingsPage() {
     if (!window.confirm('Are you sure you want to delete this branch?')) return;
     try {
       await api.delete(`/organization/branches/${id}`);
+      dispatch(removeBranch(id));
       toast.success('Branch deactivated');
       fetchOrganizationData();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Delete failed');
+      toast.error(err.response?.data?.message || err.message || 'Delete failed');
     }
   };
 
@@ -250,7 +298,11 @@ export default function CompanySettingsPage() {
 
         {activeTab === 'branches' && (
           <button
-            onClick={() => setShowBranchModal(true)}
+            onClick={() => {
+              setEditingBranch(null);
+              setBranchForm(getInitialBranchForm());
+              setShowBranchModal(true);
+            }}
             className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
           >
             <Plus className="w-4 h-4" />
@@ -487,18 +539,31 @@ export default function CompanySettingsPage() {
                       {b.code}
                     </span>
                   </div>
-                  {b.isHeadquarters ? (
-                    <span className="px-2.5 py-1 text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-full flex items-center gap-1">
-                      <Shield className="w-3 h-3" /> Headquarters
-                    </span>
-                  ) : (
+                  <div className="flex items-center gap-1.5">
+                    {b.isHeadquarters && (
+                      <span className="px-2.5 py-1 text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-full flex items-center gap-1">
+                        <Shield className="w-3 h-3" /> Headquarters
+                      </span>
+                    )}
                     <button
-                      onClick={() => handleDeleteBranch(b._id, b.isHeadquarters)}
-                      className="p-1 text-slate-400 hover:text-red-600"
+                      type="button"
+                      onClick={() => openEditBranch(b)}
+                      className="p-1 text-slate-400 hover:text-blue-600"
+                      title="Edit Branch"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Edit2 className="w-4 h-4" />
                     </button>
-                  )}
+                    {!b.isHeadquarters && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteBranch(b._id, b.isHeadquarters)}
+                        className="p-1 text-slate-400 hover:text-red-600"
+                        title="Delete Branch"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="mt-4 space-y-1.5 text-xs text-slate-600">
@@ -902,21 +967,24 @@ export default function CompanySettingsPage() {
         </div>
       )}
 
-      {/* ADD BRANCH MODAL */}
+      {/* ADD / EDIT BRANCH MODAL */}
       {showBranchModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Add New Branch Location</h3>
+              <h3 className="font-bold text-slate-900 text-base">
+                {editingBranch ? 'Edit Branch Location' : 'Add New Branch Location'}
+              </h3>
               <button
-                onClick={() => setShowBranchModal(false)}
+                type="button"
+                onClick={closeBranchModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 &times;
               </button>
             </div>
 
-            <form onSubmit={handleCreateBranch} className="space-y-3 text-xs">
+            <form onSubmit={handleSaveBranch} className="space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Branch Name *</label>
@@ -980,9 +1048,10 @@ export default function CompanySettingsPage() {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">City</label>
+                  <label className="block font-bold text-slate-700 mb-1">City *</label>
                   <input
                     type="text"
+                    required
                     value={branchForm.address.city}
                     onChange={(e) =>
                       setBranchForm({
@@ -994,9 +1063,10 @@ export default function CompanySettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">State</label>
+                  <label className="block font-bold text-slate-700 mb-1">State *</label>
                   <input
                     type="text"
+                    required
                     value={branchForm.address.state}
                     onChange={(e) =>
                       setBranchForm({
@@ -1023,10 +1093,20 @@ export default function CompanySettingsPage() {
                 </div>
               </div>
 
+              <label className="flex items-center gap-2 pt-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={branchForm.isHeadquarters}
+                  onChange={(e) => setBranchForm({ ...branchForm, isHeadquarters: e.target.checked })}
+                  className="rounded text-blue-600"
+                />
+                <span className="font-semibold text-slate-700">Designate as Corporate Headquarters</span>
+              </label>
+
               <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowBranchModal(false)}
+                  onClick={closeBranchModal}
                   className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-bold"
                 >
                   Cancel
@@ -1035,7 +1115,7 @@ export default function CompanySettingsPage() {
                   type="submit"
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg"
                 >
-                  Save Branch
+                  {editingBranch ? 'Update Branch' : 'Save Branch'}
                 </button>
               </div>
             </form>

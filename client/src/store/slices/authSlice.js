@@ -147,6 +147,14 @@ const authSlice = createSlice({
       if (user) sessionStorage.setItem('pr_user', JSON.stringify(user));
       if (company) sessionStorage.setItem('pr_company', JSON.stringify(company));
     },
+    updateCompanyInfo: (state, action) => {
+      const updatedCompany = action.payload;
+      if (updatedCompany) {
+        state.company = updatedCompany;
+        state.tenant = updatedCompany;
+        sessionStorage.setItem('pr_company', JSON.stringify(updatedCompany));
+      }
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -206,6 +214,6 @@ const authSlice = createSlice({
   },
 });
 
-export const { clearError, setCredentials } = authSlice.actions;
+export const { clearError, setCredentials, updateCompanyInfo } = authSlice.actions;
 export default authSlice.reducer;
 

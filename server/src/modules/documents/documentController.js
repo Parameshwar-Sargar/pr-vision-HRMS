@@ -12,6 +12,19 @@ import {
 } from '../../utils/securityUtils.js';
 import fs from 'fs';
 
+const DOCUMENT_CATEGORIES = new Set([
+  'Offer Letter',
+  'Appointment Letter',
+  'ID Proof',
+  'Certificate',
+  'Tax Document',
+  'Company Policy',
+  'Experience Letter',
+  'Relieving Letter',
+  'Payslip Archive',
+  'Other',
+]);
+
 export const getDocuments = async (req, res, next) => {
   try {
     const { employeeId, category } = req.query;
@@ -105,6 +118,17 @@ export const uploadDocument = async (req, res, next) => {
     }
 
     const { title, category, employeeId } = req.body;
+    const resolvedCategory = category ? String(category).trim() : 'Other';
+    if (!DOCUMENT_CATEGORIES.has(resolvedCategory)) {
+      safeDeleteFile(uploadedPath);
+      return sendError(
+        res,
+        `Invalid document category '${resolvedCategory}'. Allowed: ${Array.from(DOCUMENT_CATEGORIES).join(', ')}.`,
+        [],
+        400
+      );
+    }
+
     const adminOrHR = isAdminOrHR(req.user.role);
 
     // Ownership check on document upload: Non-Admin/HR can only upload documents for themselves
@@ -136,10 +160,11 @@ export const uploadDocument = async (req, res, next) => {
       targetEmployeeId = req.verifiedEmployeeId;
     }
 
+    const trimmedTitle = title ? String(title).trim() : '';
     const doc = await Document.create({
       employeeId: targetEmployeeId,
-      title: title || req.file.originalname,
-      category: category || 'Other',
+      title: trimmedTitle || req.file.originalname,
+      category: resolvedCategory,
       fileName: req.file.filename,
       fileUrl: '/api/v1/documents/pending/download',
       fileSize: req.file.size,
@@ -150,7 +175,12 @@ export const uploadDocument = async (req, res, next) => {
     doc.fileUrl = `/api/v1/documents/${doc._id}/download`;
     await doc.save();
 
-    return sendSuccess(res, 'Document uploaded successfully.', { document: doc }, 201);
+    const populatedDoc = await Document.findById(doc._id)
+      .populate('employeeId', 'firstName lastName employeeId')
+      .populate('uploadedBy', 'email')
+      .lean();
+
+    return sendSuccess(res, 'Document uploaded successfully.', { document: populatedDoc || doc }, 201);
   } catch (error) {
     safeDeleteFile(uploadedPath);
     next(error);

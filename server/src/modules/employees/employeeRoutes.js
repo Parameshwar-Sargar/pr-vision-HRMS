@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   getEmployees,
+  getEmployeeOptions,
   getEmployeeById,
   getMyProfile,
   updateMyProfile,
@@ -23,6 +24,9 @@ router.use(authenticate);
 // Self-service profile routes (must precede /:id)
 router.get('/me', getMyProfile);
 router.patch('/me', updateMyProfile);
+
+// Lightweight dropdown options route (must precede /:id)
+router.get('/options', getEmployeeOptions);
 
 router.get('/', getEmployees);
 router.get('/:id', getEmployeeById);

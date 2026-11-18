@@ -3,7 +3,7 @@ import Attendance from '../../models/Attendance.js';
 import Payslip from '../../models/Payslip.js';
 import { ROLES } from '../../config/constants.js';
 import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
-import { sanitizeCsvCell } from '../../utils/securityUtils.js';
+import { isValidObjectId, sanitizeCsvCell } from '../../utils/securityUtils.js';
 
 export const getEmployeeReport = async (req, res, next) => {
   try {
@@ -17,8 +17,18 @@ export const getEmployeeReport = async (req, res, next) => {
       filter.managerId = req.verifiedEmployeeId;
     }
 
-    if (branchId) filter.branchId = branchId;
-    if (departmentId) filter.departmentId = departmentId;
+    if (branchId) {
+      if (!isValidObjectId(branchId)) {
+        return sendError(res, 'Invalid branch ID format.', [], 400);
+      }
+      filter.branchId = branchId;
+    }
+    if (departmentId) {
+      if (!isValidObjectId(departmentId)) {
+        return sendError(res, 'Invalid department ID format.', [], 400);
+      }
+      filter.departmentId = departmentId;
+    }
 
     const isCsv = format === 'csv';
     const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 500 });

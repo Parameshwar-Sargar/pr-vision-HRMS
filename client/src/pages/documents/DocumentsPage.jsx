@@ -1,9 +1,47 @@
 import React, { useEffect, useState } from 'react';
+import { useSelector } from 'react-redux';
 import api, { downloadAuthenticatedFile } from '../../services/api';
+import useEmployeeOptions from '../../hooks/useEmployeeOptions';
+import EmployeeOptionPicker from '../../components/common/EmployeeOptionPicker';
 import toast from 'react-hot-toast';
-import { FileText, Upload, Download, Filter, Plus, X } from 'lucide-react';
+import { FileText, Upload, Download, Trash2, X } from 'lucide-react';
+
+const DOCUMENT_CATEGORIES = [
+  'Company Policy',
+  'Offer Letter',
+  'Appointment Letter',
+  'ID Proof',
+  'Certificate',
+  'Tax Document',
+  'Experience Letter',
+  'Relieving Letter',
+  'Payslip Archive',
+  'Other',
+];
+
+const MIME_TO_EXT = {
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/webp': 'webp',
+  'text/csv': 'csv',
+  'application/csv': 'csv',
+};
+
+const getDownloadFilename = (doc) => {
+  const fileExtMatch = doc.fileName?.match(/\.([a-zA-Z0-9]+)$/);
+  const ext = fileExtMatch?.[1] || MIME_TO_EXT[doc.mimeType] || 'pdf';
+  const baseTitle = (doc.title || 'document').replace(/\.[^/.]+$/, '');
+  return `${baseTitle}.${ext}`;
+};
 
 export default function DocumentsPage() {
+  const { user } = useSelector((state) => state.auth);
+  const canManage = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER'].includes(user?.role);
+
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -11,8 +49,14 @@ export default function DocumentsPage() {
 
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('Company Policy');
+  const [targetEmployeeId, setTargetEmployeeId] = useState('');
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+
+  const empOptions = useEmployeeOptions({
+    enabled: Boolean(showUploadModal && canManage),
+    limit: 20,
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -29,7 +73,7 @@ export default function DocumentsPage() {
       setDocuments(res.data?.documents || res.documents || []);
     } catch (err) {
       if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') return;
-      toast.error('Failed to load documents');
+      toast.error(err.message || 'Failed to load documents');
     } finally {
       setLoading(false);
     }
@@ -38,8 +82,8 @@ export default function DocumentsPage() {
   const handleDownloadDocument = async (doc) => {
     try {
       toast.loading(`Downloading "${doc.title}"...`, { id: 'doc-dl' });
-      const url = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/documents/${doc._id}/download`;
-      await downloadAuthenticatedFile(url, `${doc.title || 'document'}.${doc.fileType?.split('/')?.[1] || 'pdf'}`);
+      const url = `/documents/${doc._id}/download`;
+      await downloadAuthenticatedFile(url, getDownloadFilename(doc));
       toast.success('Download complete!', { id: 'doc-dl' });
     } catch (err) {
       toast.error(err.message || 'Download failed', { id: 'doc-dl' });
@@ -56,8 +100,11 @@ export default function DocumentsPage() {
     try {
       setUploading(true);
       const formData = new FormData();
-      formData.append('title', title);
+      formData.append('title', title.trim());
       formData.append('category', category);
+      if (canManage && targetEmployeeId) {
+        formData.append('employeeId', targetEmployeeId);
+      }
       formData.append('file', file);
 
       await api.post('/documents/upload', formData, {
@@ -67,12 +114,26 @@ export default function DocumentsPage() {
       toast.success('Document uploaded successfully!');
       setShowUploadModal(false);
       setTitle('');
+      setTargetEmployeeId('');
       setFile(null);
+      empOptions.clearSearch();
       fetchDocuments();
     } catch (err) {
-      toast.error(err.message || 'Upload failed');
+      toast.error(err.response?.data?.message || err.message || 'Upload failed');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDeleteDocument = async (doc) => {
+    if (!window.confirm(`Delete document "${doc.title}"?`)) return;
+    try {
+      await api.delete(`/documents/${doc._id}`);
+      setDocuments((prev) => prev.filter((d) => d._id !== doc._id));
+      toast.success('Document deleted.');
+      fetchDocuments();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to delete document');
     }
   };
 
@@ -81,7 +142,7 @@ export default function DocumentsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-slate-900 tracking-tight">Document Repository</h2>
-          <p className="text-xs text-slate-500">Corporate policies, contracts, employee records & forms</p>
+          <p className="text-xs text-slate-500">Corporate policies, letters, employee records & forms</p>
         </div>
 
         <button
@@ -94,8 +155,8 @@ export default function DocumentsPage() {
       </div>
 
       {/* Filter */}
-      <div className="flex items-center gap-2">
-        {['', 'Company Policy', 'Offer Letter', 'Contract', 'Tax Document', 'Other'].map((cat) => (
+      <div className="flex flex-wrap items-center gap-2">
+        {['', 'Company Policy', 'Offer Letter', 'Appointment Letter', 'ID Proof', 'Tax Document', 'Certificate', 'Other'].map((cat) => (
           <button
             key={cat}
             onClick={() => setCategoryFilter(cat)}
@@ -131,13 +192,30 @@ export default function DocumentsPage() {
                   <span className="p-2.5 rounded-xl bg-blue-50 text-blue-600 mb-2">
                     <FileText className="w-5 h-5" />
                   </span>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600">
-                    {doc.category}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600">
+                      {doc.category}
+                    </span>
+                    {canManage && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDocument(doc)}
+                        className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                        title="Delete Document"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <h3 className="text-sm font-bold text-slate-900 mt-2">{doc.title}</h3>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {doc.employeeId
+                    ? `Employee: ${doc.employeeId.firstName} ${doc.employeeId.lastName} (${doc.employeeId.employeeId})`
+                    : 'Scope: Company-Wide Shared'}
+                </p>
                 <p className="text-[11px] text-slate-400 font-mono mt-1">
-                  Size: {(doc.fileSize / 1024).toFixed(1)} KB
+                  Size: {((doc.fileSize || 0) / 1024).toFixed(1)} KB
                 </p>
               </div>
 
@@ -188,17 +266,28 @@ export default function DocumentsPage() {
                   onChange={(e) => setCategory(e.target.value)}
                   className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
                 >
-                  <option value="Company Policy">Company Policy</option>
-                  <option value="Offer Letter">Offer Letter</option>
-                  <option value="Contract">Contract</option>
-                  <option value="Tax Document">Tax Document</option>
-                  <option value="Other">Other</option>
+                  {DOCUMENT_CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
                 </select>
               </div>
+              {canManage && (
+                <EmployeeOptionPicker
+                  mode="single"
+                  label="Assign to Employee (Optional)"
+                  emptyOptionLabel="Company-Wide Policy / Shared Document"
+                  value={targetEmployeeId}
+                  onChange={setTargetEmployeeId}
+                  employeeOptions={empOptions}
+                />
+              )}
               <div>
                 <label className="block font-bold text-slate-700">Select File *</label>
                 <input
                   type="file"
+                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.csv"
                   required
                   onChange={(e) => setFile(e.target.files[0])}
                   className="mt-1 block w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"

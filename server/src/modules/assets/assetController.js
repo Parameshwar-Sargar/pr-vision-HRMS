@@ -154,11 +154,16 @@ export const assignAsset = async (req, res, next) => {
       return sendError(res, 'Invalid asset or employee ID.', [], 400);
     }
 
+    const VALID_CONDITIONS = ['New', 'Good', 'Fair', 'Needs Maintenance', 'Retired'];
+    if (!VALID_CONDITIONS.includes(conditionAtAssignment)) {
+      return sendError(res, 'Invalid condition value at assignment.', [], 400);
+    }
+
     const asset = await Asset.findById(id);
     if (!asset) return sendError(res, 'Asset not found.', [], 404);
 
-    if (asset.status === 'Assigned') {
-      return sendError(res, 'Asset is already assigned to an employee.', [], 400);
+    if (asset.status !== 'Available') {
+      return sendError(res, `Asset cannot be assigned because its status is '${asset.status}'.`, [], 400);
     }
 
     const employee = await Employee.findOne({ _id: employeeId, isDeleted: false }).select('_id').lean();
@@ -167,14 +172,14 @@ export const assignAsset = async (req, res, next) => {
     const assignment = await AssetAssignment.create({
       assetId: id,
       employeeId,
-      assignedBy: req.user._id,
-      conditionAtAssignment,
+      assignedCondition: conditionAtAssignment,
       notes: notes || '',
       status: 'Active',
     });
 
     asset.status = 'Assigned';
     asset.currentAssignedTo = employeeId;
+    asset.condition = conditionAtAssignment;
     await asset.save();
 
     return sendSuccess(res, 'Asset assigned successfully.', { assignment, asset });
@@ -190,25 +195,42 @@ export const returnAsset = async (req, res, next) => {
       return sendError(res, 'Invalid asset ID.', [], 400);
     }
     const { conditionAtReturn = 'Good', remarks } = req.body;
+    const VALID_CONDITIONS = ['New', 'Good', 'Fair', 'Needs Maintenance', 'Retired'];
+    if (!VALID_CONDITIONS.includes(conditionAtReturn)) {
+      return sendError(res, 'Invalid condition value at return.', [], 400);
+    }
 
     const asset = await Asset.findById(id);
     if (!asset) return sendError(res, 'Asset not found.', [], 404);
 
     const activeAssignment = await AssetAssignment.findOne({ assetId: id, status: 'Active' });
+    if (asset.status !== 'Assigned' && !activeAssignment) {
+      return sendError(res, 'Asset is not currently assigned.', [], 400);
+    }
+
     if (activeAssignment) {
       activeAssignment.status = 'Returned';
       activeAssignment.returnedDate = new Date();
-      activeAssignment.conditionAtReturn = conditionAtReturn;
-      activeAssignment.remarks = remarks || '';
+      activeAssignment.returnCondition = conditionAtReturn;
+      if (remarks) {
+        activeAssignment.notes = activeAssignment.notes
+          ? `${activeAssignment.notes} | Return: ${remarks}`
+          : String(remarks);
+      }
       await activeAssignment.save();
     }
 
-    asset.status = 'Available';
+    asset.status =
+      conditionAtReturn === 'Retired'
+        ? 'Decommissioned'
+        : conditionAtReturn === 'Needs Maintenance'
+        ? 'Under Repair'
+        : 'Available';
     asset.currentAssignedTo = null;
     asset.condition = conditionAtReturn;
     await asset.save();
 
-    return sendSuccess(res, 'Asset returned and marked as Available.', { asset });
+    return sendSuccess(res, `Asset returned and marked as ${asset.status}.`, { asset, assignment: activeAssignment });
   } catch (error) {
     next(error);
   }

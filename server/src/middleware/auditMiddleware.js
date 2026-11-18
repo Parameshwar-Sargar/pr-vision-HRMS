@@ -18,8 +18,8 @@ export const logAudit = async ({
     const userAgent = req.headers['user-agent'] || '';
     const sanitizedDetails = sanitizeAuditDetails(details);
 
-    // Non-blocking audit persistence to avoid adding write latency to API responses
-    AuditLog.create({
+    // Non-blocking by default for un-awaited callers, awaitable when caller needs strict ordering
+    return AuditLog.create({
       actorId,
       actorEmail,
       actorRole,

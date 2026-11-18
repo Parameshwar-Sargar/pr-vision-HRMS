@@ -2,14 +2,15 @@ import { z } from 'zod';
 import Designation from '../../models/Designation.js';
 import Department from '../../models/Department.js';
 import Employee from '../../models/Employee.js';
+import { escapeRegex, isValidObjectId } from '../../utils/securityUtils.js';
 import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 
 const designationSchema = z.object({
-  title: z.string().min(2, 'Designation title must be at least 2 characters'),
+  title: z.string().trim().min(2, 'Designation title must be at least 2 characters'),
   departmentId: z.string().min(1, 'Department is required'),
-  code: z.string().optional().default(''),
-  level: z.number().default(1),
-  description: z.string().optional().default(''),
+  code: z.string().trim().optional().default(''),
+  level: z.coerce.number().int().min(1).default(1),
+  description: z.string().trim().optional().default(''),
 });
 
 export const getDesignations = async (req, res, next) => {
@@ -17,6 +18,9 @@ export const getDesignations = async (req, res, next) => {
     const { departmentId } = req.query;
     const query = { isDeleted: false };
     if (departmentId) {
+      if (!isValidObjectId(departmentId)) {
+        return sendError(res, 'Invalid department ID format.', [], 400);
+      }
       query.departmentId = departmentId;
     }
 
@@ -44,9 +48,12 @@ export const getDesignations = async (req, res, next) => {
 export const createDesignation = async (req, res, next) => {
   try {
     const validated = designationSchema.parse(req.body);
+    if (!isValidObjectId(validated.departmentId)) {
+      return sendError(res, 'Invalid department ID.', [], 400);
+    }
 
     const exists = await Designation.findOne({
-      title: { $regex: new RegExp(`^${validated.title}$`, 'i') },
+      title: { $regex: new RegExp(`^${escapeRegex(validated.title)}$`, 'i') },
       departmentId: validated.departmentId,
       isDeleted: false,
     })
@@ -78,11 +85,29 @@ export const createDesignation = async (req, res, next) => {
 export const updateDesignation = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid designation ID.', [], 400);
+    }
     const validated = designationSchema.parse(req.body);
+    if (!isValidObjectId(validated.departmentId)) {
+      return sendError(res, 'Invalid department ID.', [], 400);
+    }
 
     const designation = await Designation.findOne({ _id: id, isDeleted: false });
     if (!designation) {
       return sendError(res, 'Designation not found.', [], 404);
+    }
+
+    const duplicate = await Designation.findOne({
+      _id: { $ne: id },
+      title: { $regex: new RegExp(`^${escapeRegex(validated.title)}$`, 'i') },
+      departmentId: validated.departmentId,
+      isDeleted: false,
+    })
+      .select('_id')
+      .lean();
+    if (duplicate) {
+      return sendError(res, 'Another designation with this title already exists in this department.', [], 409);
     }
 
     designation.title = validated.title;
@@ -92,7 +117,10 @@ export const updateDesignation = async (req, res, next) => {
     designation.description = validated.description;
 
     await designation.save();
-    return sendSuccess(res, 'Designation updated successfully.', { designation });
+    const populated = await Designation.findById(designation._id)
+      .populate('departmentId', 'name code')
+      .lean();
+    return sendSuccess(res, 'Designation updated successfully.', { designation: populated });
   } catch (error) {
     next(error);
   }
@@ -101,6 +129,9 @@ export const updateDesignation = async (req, res, next) => {
 export const deleteDesignation = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid designation ID.', [], 400);
+    }
 
     const activeEmployees = await Employee.countDocuments({
       designationId: id,
@@ -116,7 +147,7 @@ export const deleteDesignation = async (req, res, next) => {
       );
     }
 
-    const designation = await Designation.findOne({ _id: id });
+    const designation = await Designation.findOne({ _id: id, isDeleted: false });
     if (!designation) {
       return sendError(res, 'Designation not found.', [], 404);
     }

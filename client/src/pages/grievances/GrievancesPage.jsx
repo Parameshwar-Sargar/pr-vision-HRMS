@@ -28,7 +28,13 @@ export default function GrievancesPage() {
     isConfidential: false,
   });
 
-  const canResolve = ['ADMIN', 'HR_MANAGER'].includes(user?.role);
+  const canResolve = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER'].includes(user?.role);
+  const canResolveTicket = (g) =>
+    canResolve ||
+    (user?.role === 'MANAGER' &&
+      !g?.isConfidential &&
+      g?.assignedTo &&
+      String(g.assignedTo?._id || g.assignedTo) === String(user?._id));
 
   const fetchGrievances = async (showSpinner = false, signal = null) => {
     if (showSpinner) setIsLoading(true);
@@ -178,7 +184,7 @@ export default function GrievancesPage() {
                   {new Date(g.createdAt).toLocaleDateString()}
                 </td>
                 <td className="py-3 px-4 text-right">
-                  {canResolve && g.status !== 'Resolved' && g.status !== 'Closed' && (
+                  {canResolveTicket(g) && g.status !== 'Resolved' && g.status !== 'Closed' && (
                     <button
                       onClick={() => setResolveModalItem(g)}
                       className="text-[11px] font-bold text-rose-600 hover:text-rose-800"

@@ -1,9 +1,14 @@
 import React, { useEffect, useState } from 'react';
+import { useSelector } from 'react-redux';
 import api, { downloadAuthenticatedFile } from '../../services/api';
 import toast from 'react-hot-toast';
 import { BarChart3, Download, Users, CalendarCheck, DollarSign } from 'lucide-react';
 
 export default function ReportsPage() {
+  const { user } = useSelector((state) => state.auth);
+  const canViewPayrollReport = ['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN'].includes(
+    user?.role
+  );
   const [activeReport, setActiveReport] = useState('employees'); // 'employees' | 'attendance' | 'payroll'
   const [reportData, setReportData] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,15 +86,17 @@ export default function ReportsPage() {
           <CalendarCheck className="w-4 h-4" />
           <span>Attendance</span>
         </button>
-        <button
-          onClick={() => setActiveReport('payroll')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-            activeReport === 'payroll' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
-          }`}
-        >
-          <DollarSign className="w-4 h-4" />
-          <span>Payroll</span>
-        </button>
+        {canViewPayrollReport && (
+          <button
+            onClick={() => setActiveReport('payroll')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
+              activeReport === 'payroll' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+            }`}
+          >
+            <DollarSign className="w-4 h-4" />
+            <span>Payroll</span>
+          </button>
+        )}
       </div>
 
       {/* Report Table */}

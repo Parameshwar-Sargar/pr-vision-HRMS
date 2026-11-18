@@ -56,6 +56,7 @@ export default function EmployeesPage() {
     branchId: '',
     departmentId: '',
     designationId: '',
+    managerId: '',
     shiftId: '',
     employmentType: 'Full-Time',
     gender: 'Male',
@@ -152,6 +153,7 @@ export default function EmployeesPage() {
         email: formData.email.trim().toLowerCase(),
         phone: formData.phone.trim(),
         branchId: formData.branchId || null,
+        managerId: formData.managerId || null,
         shiftId: formData.shiftId || null,
       };
 
@@ -170,6 +172,7 @@ export default function EmployeesPage() {
         branchId: '',
         departmentId: '',
         designationId: '',
+        managerId: '',
         shiftId: '',
         employmentType: 'Full-Time',
         gender: 'Male',
@@ -194,6 +197,7 @@ export default function EmployeesPage() {
       phone: emp.phone || '',
       departmentId: emp.departmentId?._id || emp.departmentId || '',
       designationId: emp.designationId?._id || emp.designationId || '',
+      managerId: emp.managerId?._id || emp.managerId || '',
       branchId: emp.branchId?._id || emp.branchId || '',
       shiftId: emp.shiftId?._id || emp.shiftId || '',
       employmentType: emp.employmentType || 'Full-Time',
@@ -212,6 +216,7 @@ export default function EmployeesPage() {
         phone: editingEmployee.phone.trim(),
         departmentId: editingEmployee.departmentId,
         designationId: editingEmployee.designationId,
+        managerId: editingEmployee.managerId || null,
         branchId: editingEmployee.branchId || null,
         shiftId: editingEmployee.shiftId || null,
         employmentType: editingEmployee.employmentType,
@@ -351,10 +356,14 @@ export default function EmployeesPage() {
             className="px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-blue-600"
           >
             <option value="">All Lifecycle Statuses</option>
-            <option value="Active">Active</option>
             <option value="Probation">Probation</option>
             <option value="Confirmed">Confirmed</option>
+            <option value="Promoted">Promoted</option>
+            <option value="Transferred">Transferred</option>
+            <option value="Active">Active</option>
             <option value="Resigned">Resigned</option>
+            <option value="Relieved">Relieved</option>
+            <option value="Terminated">Terminated</option>
           </select>
         </div>
       </div>
@@ -617,8 +626,8 @@ export default function EmployeesPage() {
                 </div>
               </div>
 
-              {/* Branch & Shift */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Branch, Shift & Reporting Manager */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Assigned Branch Location</label>
                   <select
@@ -650,6 +659,24 @@ export default function EmployeesPage() {
                     {shifts.map((s) => (
                       <option key={s._id} value={s._id}>
                         {s.name} ({s.startTime} - {s.endTime})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Reporting Manager</label>
+                  <select
+                    name="managerId"
+                    disabled={isSaving}
+                    value={formData.managerId}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-600 bg-white"
+                  >
+                    <option value="">No Manager / Head</option>
+                    {employees.map((mgr) => (
+                      <option key={mgr._id} value={mgr._id}>
+                        {mgr.firstName} {mgr.lastName} ({mgr.employeeId})
                       </option>
                     ))}
                   </select>
@@ -899,6 +926,14 @@ export default function EmployeesPage() {
                 <span className="text-[10px] font-bold text-slate-400 uppercase">Status</span>
                 <p className="font-semibold text-emerald-600">{selectedEmployee.employmentStatus || selectedEmployee.lifecycleStage || 'Confirmed'}</p>
               </div>
+              <div className="p-3 rounded-xl bg-slate-50 col-span-2">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Reporting Manager</span>
+                <p className="font-semibold text-slate-800">
+                  {selectedEmployee.managerId
+                    ? `${selectedEmployee.managerId.firstName} ${selectedEmployee.managerId.lastName} (${selectedEmployee.managerId.employeeId})`
+                    : 'Not Assigned'}
+                </p>
+              </div>
             </div>
 
             <div className="flex justify-end pt-3 border-t border-slate-100">
@@ -972,7 +1007,11 @@ export default function EmployeesPage() {
                     <option value="Probation">Probation</option>
                     <option value="Confirmed">Confirmed</option>
                     <option value="Promoted">Promoted</option>
+                    <option value="Transferred">Transferred</option>
+                    <option value="Active">Active</option>
                     <option value="Resigned">Resigned</option>
+                    <option value="Relieved">Relieved</option>
+                    <option value="Terminated">Terminated</option>
                   </select>
                 </div>
               </div>
@@ -1004,6 +1043,56 @@ export default function EmployeesPage() {
                         {des.title}
                       </option>
                     ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Branch</label>
+                  <select
+                    value={editingEmployee.branchId}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, branchId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
+                    <option value="">Default / HQ</option>
+                    {branches.map((b) => (
+                      <option key={b._id} value={b._id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Work Shift</label>
+                  <select
+                    value={editingEmployee.shiftId}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, shiftId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
+                    <option value="">Standard Shift</option>
+                    {shifts.map((s) => (
+                      <option key={s._id} value={s._id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Reporting Manager</label>
+                  <select
+                    value={editingEmployee.managerId}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, managerId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
+                    <option value="">No Manager</option>
+                    {employees
+                      .filter((mgr) => mgr._id !== editingEmployee._id)
+                      .map((mgr) => (
+                        <option key={mgr._id} value={mgr._id}>
+                          {mgr.firstName} {mgr.lastName} ({mgr.employeeId})
+                        </option>
+                      ))}
                   </select>
                 </div>
               </div>

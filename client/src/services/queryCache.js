@@ -77,12 +77,15 @@ class QueryCache {
       affected.add('dashboard');
       affected.add('attendance');
       affected.add('reports');
+      if (cleanUrl.includes('/cancel')) {
+        affected.add('payroll');
+      }
     }
     if (tag === 'holidays') {
       affected.add('dashboard');
       affected.add('leaves');
     }
-    if (tag === 'expenses') {
+    if (tag === 'expenses' || tag === 'announcements') {
       affected.add('dashboard');
     }
     if (tag === 'employees') {

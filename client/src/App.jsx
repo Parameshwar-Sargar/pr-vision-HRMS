@@ -119,7 +119,7 @@ export default function App() {
           <Route
             path="/employees"
             element={
-              <ProtectedRoute allowedRoles={['ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN']}>
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER', 'PAYROLL_ADMIN']}>
                 <EmployeesPage />
               </ProtectedRoute>
             }
@@ -127,7 +127,7 @@ export default function App() {
           <Route
             path="/departments"
             element={
-              <ProtectedRoute allowedRoles={['ADMIN', 'HR_MANAGER']}>
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER']}>
                 <DepartmentsPage />
               </ProtectedRoute>
             }
@@ -140,7 +140,7 @@ export default function App() {
           <Route
             path="/recruitment"
             element={
-              <ProtectedRoute allowedRoles={['ADMIN', 'HR_MANAGER', 'RECRUITER']}>
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER', 'RECRUITER']}>
                 <RecruitmentPage />
               </ProtectedRoute>
             }
@@ -155,7 +155,7 @@ export default function App() {
           <Route
             path="/reports"
             element={
-              <ProtectedRoute allowedRoles={['ADMIN', 'HR_MANAGER', 'MANAGER', 'PAYROLL_ADMIN']}>
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER', 'MANAGER', 'PAYROLL_ADMIN']}>
                 <ReportsPage />
               </ProtectedRoute>
             }
@@ -165,7 +165,7 @@ export default function App() {
           <Route
             path="/organization"
             element={
-              <ProtectedRoute allowedRoles={['ADMIN', 'HR_MANAGER']}>
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN', 'HR_MANAGER']}>
                 <CompanySettingsPage />
               </ProtectedRoute>
             }

@@ -1,5 +1,6 @@
 import Notification from '../../models/Notification.js';
-import { sendSuccess, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
+import { isValidObjectId } from '../../utils/securityUtils.js';
+import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 
 export const getNotifications = async (req, res, next) => {
   try {
@@ -32,8 +33,18 @@ export const getNotifications = async (req, res, next) => {
 export const markAsRead = async (req, res, next) => {
   try {
     const { id } = req.params;
-    await Notification.findOneAndUpdate({ _id: id, recipientId: req.user._id }, { isRead: true });
-    return sendSuccess(res, 'Notification marked as read.');
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid notification ID.', [], 400);
+    }
+    const notification = await Notification.findOneAndUpdate(
+      { _id: id, recipientId: req.user._id },
+      { isRead: true },
+      { new: true }
+    ).lean();
+    if (!notification) {
+      return sendError(res, 'Notification not found.', [], 404);
+    }
+    return sendSuccess(res, 'Notification marked as read.', { notification });
   } catch (error) {
     next(error);
   }

@@ -48,5 +48,7 @@ designationSchema.index({ title: 1, departmentId: 1 }, { unique: true });
 designationSchema.index({ departmentId: 1 });
 designationSchema.index({ isDeleted: 1 });
 designationSchema.index({ isDeleted: 1, departmentId: 1, level: 1 });
+designationSchema.index({ isDeleted: 1, level: 1, title: 1 });
+designationSchema.index({ isDeleted: 1, departmentId: 1, level: 1, title: 1 });
 
 export default mongoose.model('Designation', designationSchema);

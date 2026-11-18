@@ -5,6 +5,7 @@ import {
   updateJobOpening,
   getCandidates,
   addCandidate,
+  updateCandidate,
   updateCandidateStatus,
   convertCandidateToEmployee,
 } from './recruitmentController.js';
@@ -26,6 +27,8 @@ router.get(
   getCandidates
 );
 router.post('/candidates', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.RECRUITER), addCandidate);
+router.put('/candidates/:id', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.RECRUITER), updateCandidate);
+router.patch('/candidates/:id', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.RECRUITER), updateCandidate);
 router.patch('/candidates/:id/status', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER, ROLES.RECRUITER), updateCandidateStatus);
 router.post('/candidates/:id/convert', requireRoles(ROLES.ADMIN, ROLES.HR_MANAGER), convertCandidateToEmployee);
 

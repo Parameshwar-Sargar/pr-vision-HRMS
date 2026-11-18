@@ -108,47 +108,88 @@ const ensureCanManageTargetEmployee = async (req, employee) => {
   return true;
 };
 
+const INACTIVE_OPTION_STAGES = [
+  LIFECYCLE_STAGES.RESIGNED,
+  LIFECYCLE_STAGES.TERMINATED,
+  LIFECYCLE_STAGES.RELIEVED,
+];
+
+const resolveEmployeeDirectoryScope = (req) => {
+  if (req.user.role === ROLES.EMPLOYEE || req.user.role === ROLES.RECRUITER) {
+    return {
+      ok: false,
+      message: 'Access denied: Your role does not permit viewing the organization-wide employee directory.',
+    };
+  }
+
+  const query = { isDeleted: false };
+
+  if (req.user.role === ROLES.MANAGER) {
+    if (!req.verifiedEmployeeId) {
+      return {
+        ok: false,
+        message: 'Access denied: No manager employee profile found.',
+      };
+    }
+    query.managerId = req.verifiedEmployeeId;
+    return { ok: true, query, isManager: true };
+  }
+
+  if (!isPayrollPrivileged(req.user.role)) {
+    return {
+      ok: false,
+      message: 'Access denied: Insufficient permissions to view employee directory.',
+    };
+  }
+
+  return { ok: true, query, isManager: false };
+};
+
+const buildEmployeeSearchFilter = (search) => {
+  const trimmed = String(search || '').trim();
+  if (!trimmed) return null;
+  const safeSearch = escapeRegex(trimmed);
+  return [
+    { firstName: { $regex: safeSearch, $options: 'i' } },
+    { lastName: { $regex: safeSearch, $options: 'i' } },
+    { email: { $regex: safeSearch, $options: 'i' } },
+    { employeeId: { $regex: safeSearch, $options: 'i' } },
+  ];
+};
+
 export const getEmployees = async (req, res, next) => {
   try {
     const { search = '', departmentId, branchId, status } = req.query;
 
-    // RBAC: Employees and Recruiters cannot view the organization-wide employee directory
-    if (req.user.role === ROLES.EMPLOYEE || req.user.role === ROLES.RECRUITER) {
-      return sendError(
-        res,
-        'Access denied: Your role does not permit viewing the organization-wide employee directory.',
-        [],
-        403
-      );
+    const scope = resolveEmployeeDirectoryScope(req);
+    if (!scope.ok) {
+      return sendError(res, scope.message, [], 403);
     }
 
-    const query = { isDeleted: false };
-    let projection = '-bankDetails -previousEmployment -exitInterviewNotes';
-
+    const { query, isManager } = scope;
     // Managers can only view their direct reporting team with restricted PII fields
-    if (req.user.role === ROLES.MANAGER) {
-      if (!req.verifiedEmployeeId) {
-        return sendError(res, 'Access denied: No manager employee profile found.', [], 403);
+    const projection = isManager
+      ? '-bankDetails -previousEmployment -exitInterviewNotes -address -emergencyContact -dateOfBirth'
+      : '-bankDetails -previousEmployment -exitInterviewNotes';
+
+    const searchOr = buildEmployeeSearchFilter(search);
+    if (searchOr) {
+      query.$or = searchOr;
+    }
+
+    if (departmentId) {
+      if (!isValidObjectId(departmentId)) {
+        return sendError(res, 'Invalid department ID format.', [], 400);
       }
-      query.managerId = req.verifiedEmployeeId;
-      projection = '-bankDetails -previousEmployment -exitInterviewNotes -address -emergencyContact -dateOfBirth';
-    } else if (!isPayrollPrivileged(req.user.role)) {
-      return sendError(res, 'Access denied: Insufficient permissions to view employee directory.', [], 403);
+      query.departmentId = departmentId;
     }
-
-    if (search) {
-      const safeSearch = escapeRegex(String(search).trim());
-      query.$or = [
-        { firstName: { $regex: safeSearch, $options: 'i' } },
-        { lastName: { $regex: safeSearch, $options: 'i' } },
-        { email: { $regex: safeSearch, $options: 'i' } },
-        { employeeId: { $regex: safeSearch, $options: 'i' } },
-      ];
+    if (branchId) {
+      if (!isValidObjectId(branchId)) {
+        return sendError(res, 'Invalid branch ID format.', [], 400);
+      }
+      query.branchId = branchId;
     }
-
-    if (departmentId) query.departmentId = departmentId;
-    if (branchId) query.branchId = branchId;
-    if (status) query.employmentStatus = status;
+    if (status) query.employmentStatus = String(status).trim();
 
     const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 200 });
 
@@ -169,6 +210,82 @@ export const getEmployees = async (req, res, next) => {
     ]);
 
     return sendSuccess(res, 'Employees retrieved successfully.', {
+      employees,
+      pagination: buildPaginationMeta(total, page, limit),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Lightweight employee options endpoint for dropdowns & selectors.
+ * Excludes soft-deleted and exited staff by default; returns minimal identity fields with zero population.
+ */
+export const getEmployeeOptions = async (req, res, next) => {
+  try {
+    const { search = '', departmentId, branchId, status, includeInactive, includeSelf } = req.query;
+
+    const scope = resolveEmployeeDirectoryScope(req);
+    if (!scope.ok) {
+      return sendError(res, scope.message, [], 403);
+    }
+
+    const { query } = scope;
+    const andClauses = [];
+
+    // Explicit opt-in for workflows where a manager may select themselves alongside direct reports (e.g. Training enrollment).
+    if (scope.isManager && includeSelf === 'true') {
+      delete query.managerId;
+      andClauses.push({
+        $or: [{ managerId: req.verifiedEmployeeId }, { _id: req.verifiedEmployeeId }],
+      });
+    }
+
+    if (departmentId) {
+      if (!isValidObjectId(departmentId)) {
+        return sendError(res, 'Invalid department ID format.', [], 400);
+      }
+      query.departmentId = departmentId;
+    }
+
+    if (branchId) {
+      if (!isValidObjectId(branchId)) {
+        return sendError(res, 'Invalid branch ID format.', [], 400);
+      }
+      query.branchId = branchId;
+    }
+
+    if (status) {
+      query.employmentStatus = String(status).trim();
+    } else if (includeInactive !== 'true') {
+      query.employmentStatus = { $nin: INACTIVE_OPTION_STAGES };
+    }
+
+    const searchOr = buildEmployeeSearchFilter(search);
+    if (searchOr) {
+      andClauses.push({ $or: searchOr });
+    }
+
+    if (andClauses.length === 1) {
+      query.$or = andClauses[0].$or;
+    } else if (andClauses.length > 1) {
+      query.$and = andClauses;
+    }
+
+    const { page, limit, skip } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+
+    const [total, employees] = await Promise.all([
+      Employee.countDocuments(query),
+      Employee.find(query)
+        .select('_id employeeId firstName lastName email')
+        .sort({ firstName: 1, lastName: 1, employeeId: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return sendSuccess(res, 'Employee options retrieved successfully.', {
       employees,
       pagination: buildPaginationMeta(total, page, limit),
     });
@@ -503,6 +620,9 @@ export const createEmployee = async (req, res, next) => {
 export const updateEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid employee ID format.', [], 400);
+    }
     const employee = await Employee.findOne({ _id: id, isDeleted: false });
 
     if (!employee) {
@@ -516,6 +636,26 @@ export const updateEmployee = async (req, res, next) => {
         [],
         403
       );
+    }
+
+    if (req.body.managerId) {
+      if (!isValidObjectId(req.body.managerId)) {
+        return sendError(res, 'Invalid managerId ID format.', [], 400);
+      }
+      if (String(req.body.managerId) === String(employee._id)) {
+        return sendError(res, 'An employee cannot be assigned as their own reporting manager.', [], 400);
+      }
+      // Prevent multi-hop circular reporting chains (e.g. A -> B -> A)
+      let cursorId = String(req.body.managerId);
+      const visited = new Set([String(employee._id)]);
+      for (let hop = 0; hop < 20 && cursorId; hop += 1) {
+        if (visited.has(cursorId)) {
+          return sendError(res, 'Circular reporting manager assignment is not allowed.', [], 400);
+        }
+        visited.add(cursorId);
+        const mgrDoc = await Employee.findById(cursorId).select('managerId').lean();
+        cursorId = mgrDoc?.managerId ? String(mgrDoc.managerId) : null;
+      }
     }
 
     const updatableFields = [
@@ -546,9 +686,16 @@ export const updateEmployee = async (req, res, next) => {
     for (const field of updatableFields) {
       if (req.body[field] !== undefined) {
         if (nullableObjectIdFields.includes(field)) {
-          employee[field] = req.body[field] === '' ? null : req.body[field];
+          const val = req.body[field] === '' ? null : req.body[field];
+          if (val && !isValidObjectId(val)) {
+            return sendError(res, `Invalid ${field} ID format.`, [], 400);
+          }
+          employee[field] = val;
         } else if (requiredObjectIdFields.includes(field)) {
           if (req.body[field] !== '' && req.body[field] !== null) {
+            if (!isValidObjectId(req.body[field])) {
+              return sendError(res, `Invalid ${field} ID format.`, [], 400);
+            }
             employee[field] = req.body[field];
           }
         } else {
@@ -594,8 +741,20 @@ export const updateEmployee = async (req, res, next) => {
 export const confirmProbation = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const employee = await Employee.findById(id);
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid employee ID format.', [], 400);
+    }
+    const employee = await Employee.findOne({ _id: id, isDeleted: false });
     if (!employee) return sendError(res, 'Employee not found.', [], 404);
+
+    if (!(await ensureCanManageTargetEmployee(req, employee))) {
+      return sendError(
+        res,
+        'Access denied: Non-admin roles cannot modify an ADMIN or SUPER_ADMIN account.',
+        [],
+        403
+      );
+    }
 
     employee.employmentStatus = LIFECYCLE_STAGES.CONFIRMED;
     employee.confirmationDate = new Date();
@@ -619,10 +778,28 @@ export const confirmProbation = async (req, res, next) => {
 export const promoteEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return sendError(res, 'Invalid employee ID format.', [], 400);
+    }
     const { newDesignationId, newDepartmentId, remarks } = req.body;
+    if (newDesignationId && !isValidObjectId(newDesignationId)) {
+      return sendError(res, 'Invalid new designation ID format.', [], 400);
+    }
+    if (newDepartmentId && !isValidObjectId(newDepartmentId)) {
+      return sendError(res, 'Invalid new department ID format.', [], 400);
+    }
 
-    const employee = await Employee.findById(id);
+    const employee = await Employee.findOne({ _id: id, isDeleted: false });
     if (!employee) return sendError(res, 'Employee not found.', [], 404);
+
+    if (!(await ensureCanManageTargetEmployee(req, employee))) {
+      return sendError(
+        res,
+        'Access denied: Non-admin roles cannot modify an ADMIN or SUPER_ADMIN account.',
+        [],
+        403
+      );
+    }
 
     const oldDesig = employee.designationId;
     if (newDesignationId) employee.designationId = newDesignationId;

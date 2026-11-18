@@ -9,6 +9,10 @@ import UserSession from '../models/UserSession.js';
 const AUTH_CACHE_TTL_MS = 15000; // 15 seconds
 const authIdentityCache = new Map();
 
+// Minimal Employee fields needed for RBAC scope checks, tenant/branch visibility, shifts, and /auth/me
+const AUTH_EMPLOYEE_SELECT =
+  '_id userId employeeId firstName lastName email phone branchId departmentId designationId managerId shiftId employmentType employmentStatus joiningDate isDeleted';
+
 export const invalidateAuthCache = (userId = null, sessionId = null) => {
   if (userId && sessionId) {
     const exactPrefix = `${userId.toString()}:${sessionId}`;
@@ -98,11 +102,13 @@ export const authenticate = async (req, res, next) => {
     } else {
       const [userDoc, fetchedSession] = await Promise.all([
         User.findById(decoded.userId)
-          .select('-password -refreshToken')
+          .select('-password -refreshToken -__v')
           .populate('branchId', 'name code')
-          .populate('employeeId')
+          .populate({ path: 'employeeId', select: AUTH_EMPLOYEE_SELECT })
           .lean(),
-        UserSession.findOne({ sessionId, userId: decoded.userId }).lean(),
+        UserSession.findOne({ sessionId, userId: decoded.userId })
+          .select('-refreshTokenHash -__v')
+          .lean(),
       ]);
 
       if (!userDoc) {
@@ -144,10 +150,14 @@ export const authenticate = async (req, res, next) => {
       } else {
         user = sanitizeUserForResponse(userDoc);
         if (userDoc.employeeId && typeof userDoc.employeeId !== 'object') {
-          employee = await Employee.findOne({ _id: userDoc.employeeId, isDeleted: false }).lean();
+          employee = await Employee.findOne({ _id: userDoc.employeeId, isDeleted: false })
+            .select(AUTH_EMPLOYEE_SELECT)
+            .lean();
         }
         if (!employee) {
-          employee = await Employee.findOne({ userId: userDoc._id, isDeleted: false }).lean();
+          employee = await Employee.findOne({ userId: userDoc._id, isDeleted: false })
+            .select(AUTH_EMPLOYEE_SELECT)
+            .lean();
           if (employee) {
             user.employeeId = employee._id;
             User.updateOne({ _id: userDoc._id }, { $set: { employeeId: employee._id } }).catch(() => {});

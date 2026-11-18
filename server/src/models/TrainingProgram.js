@@ -18,7 +18,8 @@ const trainingProgramSchema = new mongoose.Schema(
     },
     description: {
       type: String,
-      required: true,
+      trim: true,
+      default: '',
     },
     startDate: {
       type: Date,
@@ -47,6 +48,10 @@ const trainingProgramSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+trainingProgramSchema.index({ startDate: 1 });
+trainingProgramSchema.index({ status: 1, startDate: 1 });
+trainingProgramSchema.index({ category: 1, startDate: 1 });
 
 export default mongoose.model('TrainingProgram', trainingProgramSchema);
 

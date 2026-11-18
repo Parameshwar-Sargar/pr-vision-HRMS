@@ -61,5 +61,7 @@ const payrollRunSchema = new mongoose.Schema(
 
 payrollRunSchema.index({ month: 1, year: 1 }, { unique: true });
 payrollRunSchema.index({ status: 1 });
+payrollRunSchema.index({ year: -1, month: -1 });
+payrollRunSchema.index({ status: 1, year: -1, month: -1 });
 
 export default mongoose.model('PayrollRun', payrollRunSchema);

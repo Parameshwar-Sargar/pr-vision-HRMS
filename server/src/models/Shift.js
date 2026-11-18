@@ -57,4 +57,6 @@ const shiftSchema = new mongoose.Schema(
   }
 );
 
+shiftSchema.index({ isActive: 1, createdAt: -1 });
+
 export default mongoose.model('Shift', shiftSchema);

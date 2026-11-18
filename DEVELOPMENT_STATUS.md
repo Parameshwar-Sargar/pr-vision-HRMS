@@ -400,3 +400,258 @@ Removed `'x-target-tenant'` from CORS `allowedHeaders`; handled malformed JSON a
 
 
 
+## Phase 5 — Functional Bug Fixes & Business Logic Reliability Report
+
+### 1. Executive Summary
+Phase 5 audited and resolved verified functional bugs, schema/controller mismatches, incomplete CRUD lifecycles, calculation inaccuracies, and frontend/API integration gaps across PR VISION HRMS while preserving all Phase 1–3 performance optimizations, Phase 4 RBAC/IDOR security hardening, and existing MongoDB Atlas production records. Multi-tenant schema migration was intentionally not executed.
+
+### 2. Safety Baseline & MongoDB Atlas Read-Only Integrity
+- Baseline & post-Phase-5 read-only counts on MongoDB Atlas (`pr_vision_hrms`) confirmed zero mutations to business/seeded collections (`users: 7, employees: 8, departments: 7, designations: 13, branches: 3, attendances: 39, leaverequests: 9, payrollruns: 1, documents: 0, companysettings: 1, announcements: 0, expenseclaims: 0, grievances: 0, assets: 0`; `usersessions: 54` baseline / `55` read-only check).
+- All automated functional and integration tests execute strictly against isolated `MongoMemoryServer` instances (backend) and mocked `api.defaults.adapter` + Redux stores (frontend), leaving zero residual files in upload directories.
+
+### 3. Announcements & Dashboard Synchronization Fixes
+- **Backend ([`announcementController.js`](server/src/modules/announcements/announcementController.js), [`announcementRoutes.js`](server/src/modules/announcements/announcementRoutes.js), [`dashboardController.js`](server/src/modules/dashboard/dashboardController.js))**:
+  - Replaced schema-mismatched creation logic (`content` field without required `message` and invalid `'General'` category) with Zod validation supporting both `message` and `content`, persisting to `message` and serializing both fields consistently.
+  - Added `PUT /:id` and `PATCH /:id` (`updateAnnouncement`) for editing notices and toggling `isActive`.
+  - Enforced `isActive: true`, `expiresAt > now`, and `$and`-combined branch + department audience targeting (`buildAnnouncementVisibilityFilter` / `getAnnouncements`) across both the Announcements feed and all Dashboard views.
+- **Frontend ([`AnnouncementsPage.jsx`](client/src/pages/announcements/AnnouncementsPage.jsx), [`queryCache.js`](client/src/services/queryCache.js))**:
+  - Added Edit modal, publish/unpublish toggle, branch/department targeting dropdowns backed by Redux `masterData`, complete category/priority options, `includeInactive: 'true'` for Admin/HR views, `SUPER_ADMIN` support, and `'announcements' -> 'dashboard'` cache tag invalidation.
+
+### 4. Document Vault Fixes
+- **Backend ([`documentController.js`](server/src/modules/documents/documentController.js))**: Added explicit `DOCUMENT_CATEGORIES` allowlist validation (deleting temporary uploads on `400`), trimmed title fallback, and populated `employeeId`/`uploadedBy` in `uploadDocument`.
+- **Frontend ([`DocumentsPage.jsx`](client/src/pages/documents/DocumentsPage.jsx))**: Removed invalid `'Contract'` category, aligned category filters/options with [`Document.js`](server/src/models/Document.js), fixed download filenames (`getDownloadFilename` deriving extension from `fileName`/`mimeType` rather than nonexistent `doc.fileType`), added employee assignment selector and Admin/HR Delete action, and switched download paths to relative `/documents/${doc._id}/download`.
+
+### 5. Payroll Engine & Statutory/Attendance Proration Fixes
+- **Backend ([`payrollController.js`](server/src/modules/payroll/payrollController.js))**:
+  - Added `conveyanceAllowance` persistence in `saveSalaryStructure` and validated `month` (`1..12`) / `year` (`2000..2100`).
+  - Replaced narrow `{ employmentStatus: 'Active' }` filter with full active payroll eligibility (`Probation`, `Confirmed`, `Promoted`, `Transferred`, `Onboarding`, `Active`, or separated employees whose `lastWorkingDate >= monthStart`) where `joiningDate <= monthEnd`.
+  - Replaced hardcoded `workingDays = 30` with shift-aware monthly working days (respecting `Shift.weeklyOffDays`, excluding non-optional `Holiday` dates scoped to employee `branchId` or company-wide).
+  - Integrated attendance statuses (`Half-day` = `0.5` LOP, `Absent` = `1.0` LOP), approved `LeaveRequest` days (`isPaid === false` counted as LOP; paid leaves counted without double-counting), and mid-month join/exit `unservedDays`.
+  - Prorated `basicSalary`, `hra`, `specialAllowance`, `conveyanceAllowance`, and fixed/basic earnings by `prorationFactor = presentDays / workingDays`; computed `percentage_of_gross` earnings on earned pre-custom gross; calculated PF (`12%` default on earned basic), ESI (`0.75%` default on earned gross), PT/TDS/custom deductions when `presentDays > 0`; recorded `calculationSnapshot`; enforced `isLocked`/`Paid` immutability against regeneration or double-pay.
+- **Frontend ([`PayrollPage.jsx`](client/src/pages/payroll/PayrollPage.jsx))**: Included `SUPER_ADMIN` in `isAdminOrHR` and rendered `Paid / Working Days` and `LOP` breakdown in the payslips table.
+
+### 6. Expenses & Recruitment Workflow Fixes
+- **Expenses ([`expenseController.js`](server/src/modules/expenses/expenseController.js), [`ExpensesPage.jsx`](client/src/pages/expenses/ExpensesPage.jsx))**:
+  - Validated expense dates (cleaning uploaded receipts on invalid dates) and stored `receipt:${filename}` atomically on creation.
+  - Enforced expense workflow transitions (`Pending -> Approved/Rejected`, `Approved -> Reimbursed` restricted to Admin/HR/Payroll) and blocked mutations once `'Rejected'` or `'Reimbursed'`.
+  - Added receipt attachment upload (`FormData`), authenticated receipt download via `downloadAuthenticatedFile`, `'Client Entertainment'` category option, `'Mark Reimbursed'` button for `'Approved'` claims, and form resets.
+- **Recruitment ([`Candidate.js`](server/src/models/Candidate.js), [`recruitmentController.js`](server/src/modules/recruitment/recruitmentController.js), [`recruitmentRoutes.js`](server/src/modules/recruitment/recruitmentRoutes.js), [`RecruitmentPage.jsx`](client/src/pages/recruitment/RecruitmentPage.jsx))**:
+  - Added optional `interviewSchedule` subdocument (`scheduledAt`, `interviewerName`, `mode`, `meetingLink`), `PUT/PATCH /candidates/:id` (`updateCandidate`), closed-job rejection (`400`), duplicate `(jobOpeningId, email)` check (`409`), `?stage=` mapping to `status`, and removal of nonexistent `stage` query in [`dashboardController.js`](server/src/modules/dashboard/dashboardController.js).
+  - Blocked converting `'Rejected'` candidates, blocked changing status of converted hires away from `'Hired'`, and auto-provisioned annual `LeaveBalance` (`defaultDaysPerYear ?? 12`) upon candidate conversion.
+  - Added Edit Job modal, Edit/Schedule Interview modal, Onboarding Convert modal, and role-scoped action controls in `RecruitmentPage.jsx`.
+
+### 7. Attendance, Leave Balance Invariant & Holiday Calendar Fixes
+- **Attendance ([`attendanceController.js`](server/src/modules/attendance/attendanceController.js), [`AttendancePage.jsx`](client/src/pages/attendance/AttendancePage.jsx))**:
+  - Added default active `Shift` fallback when `employee.shiftId` is unassigned, overnight shift check-in math, dynamic shift/company standard hours for overtime calculation, duplicate check-in `400` handling, check-out >= check-in validation, and automatic `correctionRequest.status = 'Approved'` synchronization on HR adjustment.
+  - Fixed UTC-to-local `datetime-local` formatting bug in `AttendancePage.jsx`, added Employee "Request Correction" modal + status badges, and added "Load Requested Times" / "Reject Request" controls for HR/Admin.
+- **Leaves ([`leaveController.js`](server/src/modules/leaves/leaveController.js), [`LeavesPage.jsx`](client/src/pages/leaves/LeavesPage.jsx))**:
+  - Auto-initialized missing annual `LeaveBalance` (and missing `LeaveType` entries using `defaultDaysPerYear ?? 12`), maintained exact `remaining = allocated - used - pending` invariant across `applyLeave`, `cancelLeaveRequest`, and `reviewLeaveRequest`, prevented self-approval, and synced approved leaves to `Attendance` (`On Leave`) on unpunched dates.
+  - Allowed all roles (including Managers) to cancel their own pending leave requests while hiding self-Approve buttons, added date-range `totalDays` auto-calculation, and added a lazy-loaded `Holiday Calendar` tab (`/holidays` aware) matching [`Holiday.js`](server/src/models/Holiday.js) fields without adding extra initial-load network calls on `/leaves`.
+
+### 8. Performance, Training & Asset Lifecycle Fixes
+- **Performance ([`performanceController.js`](server/src/modules/performance/performanceController.js), [`PerformancePage.jsx`](client/src/pages/performance/PerformancePage.jsx))**: Added Zod rating (`1..5`) and goal validation, blocked self-review edits after `'Completed'`, computed default `finalScore` when omitted, replaced fake `'4.0'`/`3`-star display fallbacks with `'Pending'`, and added Initiate Cycle, Self-Review, and Complete Evaluation modals.
+- **Training ([`trainingController.js`](server/src/modules/training/trainingController.js), [`TrainingPage.jsx`](client/src/pages/training/TrainingPage.jsx))**: Added Zod validation with `endDate >= startDate` enforcement, assignment status/score (`0..100`) validation, `'Product Training'` option, Enroll Employees modal, and Update Progress modal.
+- **Assets ([`assetController.js`](server/src/modules/assets/assetController.js), [`AssetsPage.jsx`](client/src/pages/assets/AssetsPage.jsx))**: Fixed schema field mismatch by writing `assignedCondition`, `returnCondition`, and `notes` matching [`AssetAssignment.js`](server/src/models/AssetAssignment.js), blocked assigning non-`Available` assets, mapped return conditions (`'Needs Maintenance' -> 'Under Repair'`, `'Retired' -> 'Decommissioned'`), and added condition/remarks selectors in Assign and Return modals.
+
+### 9. Organization, Departments, Designations, Shifts, Holidays, Employees & UI Integration Fixes
+- **Master Data & Validation ([`organizationController.js`](server/src/modules/organization/organizationController.js), [`departmentController.js`](server/src/modules/departments/departmentController.js), [`designationController.js`](server/src/modules/designations/designationController.js), [`shiftController.js`](server/src/modules/shifts/shiftController.js), [`holidayController.js`](server/src/modules/holidays/holidayController.js), [`employeeController.js`](server/src/modules/employees/employeeController.js))**:
+  - Required branch `city`/`state` (`400`), enforced duplicate branch `code` check on update (`409`), blocked deleting Headquarters branch (`400`).
+  - Applied `escapeRegex` + `isValidObjectId` + duplicate update checks across departments (`R&D (India)` safe) and designations, added `startTime !== endTime` and duplicate-name checks in shifts, validated dates/ObjectIds/`11000` in holidays, prevented employee self-manager assignment (`managerId === id` -> `400`), and added `ensureCanManageTargetEmployee` in `confirmProbation` and `promoteEmployee`.
+- **Frontend UI & State Sync ([`authSlice.js`](client/src/store/slices/authSlice.js), [`masterDataSlice.js`](client/src/store/slices/masterDataSlice.js), [`CompanySettingsPage.jsx`](client/src/pages/settings/CompanySettingsPage.jsx), [`DepartmentsPage.jsx`](client/src/pages/departments/DepartmentsPage.jsx), [`ShiftsPage.jsx`](client/src/pages/shifts/ShiftsPage.jsx), [`EmployeesPage.jsx`](client/src/pages/employees/EmployeesPage.jsx), [`Sidebar.jsx`](client/src/components/layout/Sidebar.jsx), [`App.jsx`](client/src/App.jsx))**:
+  - Added `updateCompanyInfo` and branch CRUD reducers so organization settings & branches reflect immediately without manual refresh; added Branch Edit modal, Designation Edit modal, Shift Edit modal + `weeklyOffDays` toggles, Reporting Manager selectors (filtering self in Edit modal) + Dossier manager display, and consistent `'SUPER_ADMIN'` access alongside `'ADMIN'`.
+
+### 10. Files Created & Modified in Phase 5
+- **Created**:
+  - `server/tests/phase5Functional.test.js`
+  - `client/src/__tests__/phase5Integration.test.jsx`
+- **Modified (Backend — 20 files)**: `server/src/models/Candidate.js`, `announcementController.js`, `announcementRoutes.js`, `assetController.js`, `attendanceController.js`, `dashboardController.js`, `departmentController.js`, `designationController.js`, `documentController.js`, `employeeController.js`, `expenseController.js`, `holidayController.js`, `leaveController.js`, `organizationController.js`, `payrollController.js`, `performanceController.js`, `recruitmentController.js`, `recruitmentRoutes.js`, `shiftController.js`, `trainingController.js`.
+- **Modified (Frontend — 19 files)**: `App.jsx`, `Sidebar.jsx`, `queryCache.js`, `authSlice.js`, `masterDataSlice.js`, `AnnouncementsPage.jsx`, `AssetsPage.jsx`, `AttendancePage.jsx`, `DepartmentsPage.jsx`, `DocumentsPage.jsx`, `EmployeesPage.jsx`, `ExpensesPage.jsx`, `LeavesPage.jsx`, `PayrollPage.jsx`, `PerformancePage.jsx`, `RecruitmentPage.jsx`, `CompanySettingsPage.jsx`, `ShiftsPage.jsx`, `TrainingPage.jsx`.
+
+### 11. Final Automated Verification Results (Post-Final-Edit)
+- **Backend Syntax Check (`node --check` on `server/src/**/*.js`)**: `SYNTAX_OK: 93 files` (exit `0`).
+- **Backend Test Suite (`cd server; npm test`)**: **3 test files passed (3), 47 passed (47), 0 failed, 0 skipped**:
+  - `tests/enterpriseHRMS.test.js`: **24 / 24 passed**
+  - `tests/phase4Security.test.js`: **15 / 15 passed**
+  - `tests/phase5Functional.test.js`: **8 / 8 passed**
+- **Frontend Test Suite (`cd client; npm test`)**: **3 test files passed (3), 29 passed (29), 0 failed, 0 skipped**:
+  - `src/__tests__/phase3Verification.test.js`: **18 / 18 passed**
+  - `src/__tests__/phase3Integration.test.jsx`: **6 / 6 passed**
+  - `src/__tests__/phase5Integration.test.jsx`: **5 / 5 passed**
+- **Frontend Production Build (`cd client; npm run build`)**: Vite production bundle built cleanly (`dist/` generated with 0 errors).
+- **Upload Hygiene & DB Safety**: Zero leftover files in upload directories; live MongoDB Atlas `pr_vision_hrms` data preserved untouched.
+
+### 12. Remaining Deferred Scope (Beyond Phase 5)
+1. Multi-tenant schema migration (`tenantId` column additions & backfill) remains intentionally deferred for explicit approval before Phase 6/multi-company activation.
+2. Live manual browser QA across tabs and optional visual/UX polish remain deferred pending Phase 7 approval.
+
+---
+
+## Phase 6: End-to-End Workflow Validation, Data Integrity & Production Simulation (Completed)
+
+> [!NOTE]
+> Phase 6 validated end-to-end HRMS business workflows, exact payroll mathematics, cross-module data integrity, and role-based UI/API isolation. **Live MongoDB Atlas (`pr_vision_hrms`) was queried strictly read-only (`0` writes, `0` repairs); all E2E tests ran on isolated `MongoMemoryServer` instances and mocked frontend API adapters.** Detailed simulation breakdown is documented in [`server/docs/PHASE6_WORKFLOW_REPORT.md`](server/docs/PHASE6_WORKFLOW_REPORT.md).
+
+### 1. Phase 6 Fixes Implemented
+- **Training Schema Alignment ([`TrainingProgram.js`](server/src/models/TrainingProgram.js))**: Removed `required: true` from `description` and added `trim: true, default: ''` to match Zod `createProgramSchema`, eliminating `400` validation failures when API clients omit optional descriptions.
+- **Circular Manager Protection ([`employeeController.js`](server/src/modules/employees/employeeController.js))**: Extended `updateEmployee` `managerId` validation with multi-hop ancestor traversal (up to 20 hops) to reject indirect circular reporting hierarchies (`400`) in addition to self-management.
+
+### 2. End-to-End Workflow Coverage & Payroll Calculation Results
+- **Backend E2E Suite ([`server/tests/phase6WorkflowE2E.test.js`](server/tests/phase6WorkflowE2E.test.js))**: **10 / 10 passed** covering Steps 2–11:
+  - Employee lifecycle (`Probation -> Confirmed -> Promoted -> Resigned [July prorated / Aug excluded] -> Relieved -> Soft-Delete & Session Revocation`), duplicate/privilege/cycle guards.
+  - Attendance live punches, night-shift cross-midnight overtime (`22:00–08:00` = `10h`, `2h` OT), batch biometric sync, employee regularization -> HR approval -> LOP removal.
+  - Complete leave workflow (`Pending`/`Approved`/`Rejected`/`Cancelled`), balance invariant, `'On Leave'` attendance sync, approved cancellation block (`400`), Paid (`0` LOP) vs Unpaid LWP (`2` LOP -> Net `₹27,400` on Sept 2026) payroll impact.
+  - Comprehensive June 2026 6-employee Payroll Matrix verified to exact rupees: `PAY-01` (`₹60,500 / ₹54,246`), `PAY-02` (`₹29,600 / ₹27,180`), `PAY-03` (`₹54,000 / ₹49,480`), `PAY-04` mid-month joiner (`₹32,000 / ₹29,400`), `PAY-05` mid-month exit (`₹33,000 / ₹30,160`), `PAY-06` Pune `[0]` shift + regional/optional holidays (`₹36,000 / ₹32,920`); `PayrollRun` totals (`₹2,45,100` Gross / `₹21,714` Ded / `₹2,23,386` Net) matched sum of all 6 payslips, locked cleanly upon `Paid`, and generated valid `%PDF-` binary downloads with IDOR protection.
+  - Recruitment-to-Employee conversion (`PRV-XXXX` + `User` + `LeaveBalance`), Expenses (`Pending -> Approved -> Reimbursed` + receipt magic-byte & `/uploads` block), Private Documents (upload/download/delete disk cleanup), Performance Reviews, Training Programs, Asset assign/repair/retire state machine, Targeted Announcements + Dashboard consistency, All 7 `ROLES` matrix (`HR` invalid per schema), and Post-Run Relational & Balance Integrity Sweep.
+- **Frontend UI + API E2E Integration ([`client/src/__tests__/phase6WorkflowIntegration.test.jsx`](client/src/__tests__/phase6WorkflowIntegration.test.jsx))**: **6 / 6 passed** covering selective `queryCache` invalidation (`/shifts` vs `/leaves/apply`), `PerformancePage` self + manager evaluation flow, `TrainingPage` completion update, `AssetsPage` assign + return (`Under Repair`), `RecruitmentPage` convert modal, and 7-role `Sidebar` visibility.
+- **Live Browser Testing Disclosure**: Live Chrome DevTools E2E flows were intentionally skipped to protect live MongoDB Atlas (`pr_vision_hrms`) from write mutations during Phase 6; client branding (`index.html`, `manifest.json`) verified clean of legacy references.
+
+### 3. Statutory Flags, Workflow Gaps & Live Atlas Read-Only Anomalies
+- **Statutory / Payroll Rules Flagged**: PF/ESI/PT/TDS are manual per-employee flags (`isVerifiedByProfessional: false`) without statutory ₹15k PF cap, ₹21k ESI cutoff, state PT slabs, or tax-regime TDS automation; unlocked `'Approved'` payroll runs overwrite `Payslip` IDs on re-generation; no `/reverse` payroll endpoint exists.
+- **Remaining Workflow Observations**: Backend modules do not automatically insert `Notification` rows upon leave/expense/payroll/announcement events; `cancelLeaveRequest` restricts cancellation to `'Pending'` requests; `syncBiometricLogs` omits `overtimeHours` calculation; live Atlas lacks a default unpaid leave type (`isPaid: false`).
+- **Pre-Existing Live Atlas Anomalies (Read-Only Reported Only)**: 2 stale `LeaveBalance.remaining` values (`6aece67107df77bcc5827b85`, `6aece67107df77bcc5827b8b`), 3 orphan `LeaveBalance` records (`6af2fbb3a87716f06462cbb7`, `6af30edc185b67482e74f4f0`, `6af48fca9fc4b1cf63c0e26b`), and 1 historical `10/2026` `PayrollRun` (`6aece67a07df77bcc5827bfc`) header mismatch (`7` vs `3` `Payslip` docs).
+
+### 4. Phase 6 Final Verification Snapshot & Deferred Scope
+- **Backend Syntax Check (`server/src/**/*.js`)**: `93` files, `0` errors.
+- **Backend Suite (`cd server; npm test`)**: **4 files, 57 passed, 0 failed, 0 skipped** (`enterpriseHRMS: 24`, `phase4Security: 15`, `phase5Functional: 8`, `phase6WorkflowE2E: 10`).
+- **Frontend Suite (`cd client; npm test`)**: **4 files, 35 passed, 0 failed, 0 skipped** (`phase3Verification: 18`, `phase3Integration: 6`, `phase5Integration: 5`, `phase6WorkflowIntegration: 6`).
+- **Frontend Build (`cd client; npm run build`)**: Vite production build succeeded (`2109 modules`, `0` errors).
+- **Deferred (Beyond Phase 6)**: Multi-tenant schema migration (`tenantId`), automated statutory slab engines (pending CA/business rules sign-off), automated notification emitters, and optional live staging browser QA remain deferred for future approval. *(Note: Approved-leave cancellation authorization was implemented in Phase 6.1 below.)*
+
+---
+
+## Phase 6.1: Approved Leave Cancellation Authorization (Completed)
+
+> [!NOTE]
+> Implemented HR-authorized cancellation of Approved leave requests with mandatory audit reasoning, atomic balance restoration, Attendance reversion, and a safe `PayrollAdjustment` workflow that preserves locked/paid historical payroll immutability. Detailed report: [`server/docs/PHASE6_1_APPROVED_LEAVE_CANCELLATION_REPORT.md`](server/docs/PHASE6_1_APPROVED_LEAVE_CANCELLATION_REPORT.md).
+
+### 1. Summary of Changes
+- **Authorization & Schema ([`LeaveRequest.js`](server/src/models/LeaveRequest.js), [`leaveController.js`](server/src/modules/leaves/leaveController.js), [`auditMiddleware.js`](server/src/middleware/auditMiddleware.js))**:
+  - Allowed `HR_MANAGER`, `ADMIN`, and `SUPER_ADMIN` (`isAdminOrHR`) to cancel both `'Pending'` and `'Approved'` leave requests; blocked employees (`403`), managers (`403`), recruiters (`403`), and payroll admins (`403`) from cancelling `'Approved'` requests while preserving owner self-cancellation on `'Pending'` leaves.
+  - Enforced mandatory `cancellationReason` (`>= 3` characters) on `'Approved'` leave cancellations, stored `cancellationReason`, `cancelledBy`, `cancelledAt`, and `cancelledFromStatus`, and persisted full `AuditLog` (`LEAVE_CANCELLED`) metadata.
+  - Added atomic `LeaveRequest.findOneAndUpdate` Compare-And-Set locking and single-write aggregation-pipeline `LeaveBalance.findOneAndUpdate` to prevent concurrent duplicate cancellations or double balance restorations.
+  - Synced `'On Leave'` attendance records on cancellation (`checkInTime -> Present`/`Half-day`, future/weekly-off/holiday placeholders deleted cleanly, past/today unpunched scheduled workdays -> `Absent`).
+- **Locked Payroll Protection & Future Adjustment Workflow ([`PayrollAdjustment.js`](server/src/models/PayrollAdjustment.js), [`payrollController.js`](server/src/modules/payroll/payrollController.js), [`payrollRoutes.js`](server/src/modules/payroll/payrollRoutes.js))**:
+  - Kept `Paid` / `isLocked` `PayrollRun` and `Payslip` documents 100% immutable when overlapping approved leaves are cancelled; created unique-indexed `Pending` `PayrollAdjustment` entries (`CREDIT` or `DEDUCTION`).
+  - Added `GET /api/v1/payroll/adjustments` and `PATCH /api/v1/payroll/adjustments/:id` (`Pending -> Approved / Waived`) and automatic itemized settlement in subsequent `generatePayrollRun` batches (`status -> Applied`).
+- **Frontend & Cache Sync ([`LeavesPage.jsx`](client/src/pages/leaves/LeavesPage.jsx), [`PayrollPage.jsx`](client/src/pages/payroll/PayrollPage.jsx), [`queryCache.js`](client/src/services/queryCache.js))**:
+  - Added HR/Admin-only `Cancel Approved` action and mandatory reason confirmation modal in `LeavesPage.jsx`, cancelled reason rendering, lazy `Future Payroll Adjustments` tab in `PayrollPage.jsx`, and `'payroll'` cache invalidation on `/leaves/.../cancel`.
+
+### 2. Tests Added & Updated
+- [`server/tests/phase61ApprovedLeaveCancel.test.js`](server/tests/phase61ApprovedLeaveCancel.test.js) (**4 / 4 passed**) & updated [`server/tests/phase6WorkflowE2E.test.js`](server/tests/phase6WorkflowE2E.test.js) (employee Approved cancel `403` guard).
+- [`client/src/__tests__/phase61ApprovedLeaveCancelUI.test.jsx`](client/src/__tests__/phase61ApprovedLeaveCancelUI.test.jsx) (**3 / 3 passed**).
+
+### 3. Phase 6.1 Final Verification Results
+- **Backend Syntax Check (`server/src/**/*.js`)**: `94` files checked, `0` errors.
+- **Backend Suite (`cd server; npm test`)**: **5 files, 61 passed, 0 failed, 0 skipped** (`enterpriseHRMS: 24`, `phase4Security: 15`, `phase5Functional: 8`, `phase6WorkflowE2E: 10`, `phase61ApprovedLeaveCancel: 4`).
+- **Frontend Suite (`cd client; npm test`)**: **5 files, 38 passed, 0 failed, 0 skipped** (`phase3Verification: 18`, `phase3Integration: 6`, `phase5Integration: 5`, `phase6WorkflowIntegration: 6`, `phase61ApprovedLeaveCancelUI: 3`).
+- **Frontend Build (`cd client; npm run build`)**: Vite production build succeeded (`2109 modules`, `0` errors).
+- **Live DB Safety**: MongoDB Atlas `pr_vision_hrms` untouched (`0` writes); ready for Phase 7 upon explicit approval.
+
+---
+
+## Phase 7: Enterprise Performance Profiling & Load Testing Audit (Completed — Read-Only)
+
+> [!NOTE]
+> Phase 7 conducted a strictly **read-only** performance audit covering production bundle metrics, React/API profiling, live Atlas index & RTT telemetry, Atlas-mirrored `.explain()` plans, and isolated staging load tests (`10 / 25 / 50` concurrent users). **Zero application source files, packages, `.env` configs, or live MongoDB Atlas (`pr_vision_hrms`) records/indexes were modified.** Complete audit findings and ranked remediation roadmap: [`server/docs/PHASE7_PERFORMANCE_AUDIT.md`](server/docs/PHASE7_PERFORMANCE_AUDIT.md).
+
+### 1. Key Empirical Findings
+- **Live MongoDB Atlas Telemetry (`pr_vision_hrms` Read-Only):** Initial connect `666.98 ms`; 5-sample warm ping RTT avg **`42.62 ms`** across `29` collections. `SYNC_INDEXES=false` leaves index gaps on `payrollruns`, `jobopenings`, `candidates`, `announcements`, `documents`, `designations`, `branches`, `performancereviews`, and `trainingprograms` (confirmed `COLLSCAN + SORT` in Atlas-mirrored explain plans), plus `employees` missing `{ isDeleted: 1, departmentId: 1, createdAt: -1 }` (`inMem SORT`) while carrying `15` indexes.
+- **Controlled Staging Load Tests (`MongoMemoryServer`, `300` Emps / `3,000` Att / `600` Leaves):**
+  - *Admin-Heavy 7-Endpoint Mix:* **`10` users:** `74.94 RPS`, `p95 202.21 ms`, EL lag `p99 50.82 ms`; **`25` users:** `67.66 RPS`, `p95 601.02 ms`, EL lag `p99 108.40 ms`; **`50` users:** `62.73 RPS`, `p95 1409.32 ms`, `p99 1701.41 ms`, `/dashboard/stats` **`avg 1329.07 ms` / `max 1753.25 ms`**, EL lag `p99 192.02 ms`, CPU `131.7%` (`0` errors, `RATE_LIMIT_MAX=100000`).
+  - *Realistic Role Split (`50` Distinct Users: `5` Admin/HR + `45` ESS):* `274.14 RPS`, `p95 293.03 ms`, `p99 404.15 ms`, EL lag `p99 37.39 ms` (`0` errors).
+- **Critical & High Bottlenecks Isolated:**
+  1. `dashboardController.js` (`getDashboardStats`): pulls full `Employee` & 7-day `Attendance` collections into JS loops over `2` sequential batches (`11` queries × `42.62 ms` Atlas RTT; saturates CPU at `50` concurrency).
+  2. Live Atlas index sync gaps (`COLLSCAN + SORT` across `5+` modules) & redundant `employees` single-field indexes.
+  3. `authMiddleware.js` (`authenticate`): cold cache miss latency (`14.58 ms` vs `3.49 ms` warm, `4.18×`) with unprojected `.populate('employeeId')`.
+  4. `DashboardPage.jsx` static `recharts` import (`charts-*.js` **`395.22 kB`** / **`108.82 kB` gzip**) downloaded even by 4 roles without charts.
+  5. `app.js` missing HTTP `compression()` (`getEmployees?limit=100` sends `111.75 KB` uncompressed JSON across `6` `.populate()` queries; fetched across `5` dropdown pages without a slim lookup endpoint).
+  6. `AttendancePage.jsx` root 1-second `setInterval` causing `60` full-table React reconciliations/minute.
+- **Browser Profiling Disclosure:** Automated Chrome DevTools attachment against our isolated staging SPA (`localhost:4173`) was **blocked** by inactive browser remote debugging (`DevToolsActivePort` `ENOENT`); live browser FCP/LCP, DOM node counts, and heap telemetry remain pending Chrome debugging availability.
+
+### 2. Audit Hygiene & Next Stage
+- Staging server/UI daemons stopped cleanly; user workspace processes untouched; repository source unchanged (`server/src/*`, `client/src/*` clean relative to Phase 6.1).
+- Ready for **Phase 8 — Performance Optimization Implementation** upon explicit approval.
+
+---
+
+## Phase 8 — Batch A: Safe Performance Optimizations (Completed)
+
+> [!NOTE]
+> Implemented **Phase 8 Batch A** strictly within safe application boundaries: zero MongoDB Atlas data/index modifications, `SYNC_INDEXES` left `false`, no `tenantId` schema migration, zero `.env` or dependency churn (`node:zlib` used instead of adding third-party packages), and existing RBAC/payroll/workflow rules preserved.
+
+### 1. Summary of Changes
+- **Attendance Page Re-Render Isolation ([`AttendancePage.jsx`](client/src/pages/attendance/AttendancePage.jsx))**: Moved per-second `currentTime` state and `setInterval(..., 1000)` out of `AttendancePage` into an isolated `React.memo` leaf component `LiveAttendanceClock`, eliminating full-page / attendance-table reconciliation ticks (`0` table row re-renders over 10 ticks) while preserving unmount `clearInterval` cleanup.
+- **Lazy Recharts Chart Chunking ([`AttendanceTrendChart.jsx`](client/src/pages/dashboard/AttendanceTrendChart.jsx), [`DashboardPage.jsx`](client/src/pages/dashboard/DashboardPage.jsx))**: Extracted Recharts (`ResponsiveContainer`, `BarChart`, etc.) from static top-level imports into `React.lazy(() => import('./AttendanceTrendChart'))` wrapped in `<Suspense>`, ensuring `charts-*.js` (`395.22 kB` / `108.82 kB` gzip) is only fetched asynchronously when an Admin/HR dashboard renders non-empty attendance trends (excluded entirely for Employee, Manager, Recruiter, and Payroll Admin roles).
+- **Auth Middleware Query Projections ([`authMiddleware.js`](server/src/middleware/authMiddleware.js))**: Added explicit `AUTH_EMPLOYEE_SELECT` projection to `User.populate('employeeId')` and fallback `Employee.findOne` queries, and `.select('-refreshTokenHash -__v')` to `UserSession.findOne(...).lean()` + `-__v` on `User.findById`, dropping heavy PII/financial subdocuments (`bankDetails`, `education`, `previousEmployment`, `address`, `emergencyContact`, `exitInterviewNotes`) from auth context and shrinking `/auth/me` decoded size by `35.9%` (`3,405 B -> 2,184 B`) while cutting 29-user cold-auth average latency from `5.19 ms` to `4.13 ms` locally.
+- **Safe HTTP Gzip Compression ([`compressionMiddleware.js`](server/src/middleware/compressionMiddleware.js), [`app.js`](server/src/app.js))**: Implemented built-in `node:zlib` `gzip` compression middleware for compressible JSON/text/CSV responses `>= 1024` bytes (shrinking `GET /employees?limit=100` wire payload by **`97.2%`**, `145,807 B -> 4,142 B`), while bypassing payloads `< 1024 B`, `HEAD`, `x-no-compression`, `Accept-Encoding: identity`, `application/pdf` payslips, and `res.download()` static file streams (`Accept-Ranges`).
+
+### 2. Batch A Verification Results
+- **Backend Syntax Check (`server/src/**/*.js` + `phase8BatchA.test.js`)**: `96` files checked, `0` errors.
+- **Backend Test Suite (`cd server; npm test`)**: **6 files, 63 passed, 0 failed, 0 skipped** (includes new `tests/phase8BatchA.test.js`).
+- **Frontend Test Suite (`cd client; npm test`)**: **6 files, 40 passed, 0 failed, 0 skipped** (includes new `src/__tests__/phase8BatchA.test.jsx`).
+- **Frontend Production Build (`cd client; npm run build`)**: Vite production build succeeded (`2110 modules`, `0` errors); `AttendanceTrendChart` split into async `0.81 kB` chunk referencing `charts-xXJIdj8n.js` (`395.22 kB` / `108.82 kB` gzip) strictly inside dynamic `__vite__mapDeps`.
+- **Atlas Safety & Scope Boundary**: Live MongoDB Atlas `pr_vision_hrms` data and indexes remain untouched (`0` writes); Batch B/C optimizations (index sync, dashboard aggregations, pagination UI) remain deferred per scope.
+
+---
+
+## Phase 8 — Batch B: Database Query & Dashboard API Optimization (Completed)
+
+> [!NOTE]
+> Implemented **Phase 8 Batch B** strictly within backend query, schema index definitions, and migration planning boundaries: live MongoDB Atlas `pr_vision_hrms` data and indexes were **NOT** modified (`SYNC_INDEXES` remains `false`), no `tenantId` schema migration or `.env`/dependency changes were made, zero stale dashboard caching was introduced, and frontend UI migration to `/employees/options` stays deferred to Batch C. Complete audit, explain comparison, and benchmarks: [`server/docs/PHASE8_BATCH_B_REPORT.md`](server/docs/PHASE8_BATCH_B_REPORT.md).
+
+### 1. Summary of Changes
+- **Reversible Index Migration Plan & Non-Destructive Schema Sync ([`migrateIndexesBatchB.js`](server/src/scripts/migrateIndexesBatchB.js), `server/src/models/*.js`):** Defined `38` additive indexes (`{ background: true }`) across `15` models (`PayrollRun`, `JobOpening`, `Candidate`, `Announcement`, `Document`, `Designation`, `Branch`, `PerformanceReview`, `TrainingProgram`, `TrainingAssignment`, `ExpenseClaim`, `Grievance`, `Shift`, `PayrollAdjustment`, `Employee`) eliminating `COLLSCAN` + in-memory `SORT` across audited list/dashboard/options queries. Safe `--dry-run` default CLI (`up` / `down` reversible on the 38 Batch B indexes); `19` subsumed single-field/prefix indexes documented as optional manual DBA cleanup candidates (`REDUNDANT_INDEX_CANDIDATES`, never auto-dropped).
+- **Dashboard API Aggregation & Parallelization ([`dashboardController.js`](server/src/modules/dashboard/dashboardController.js)):** Replaced full `Employee` and 7-day `Attendance` collection downloads into Node memory with server-side MongoDB `$facet` aggregations, merged Admin/HR sequential `Promise.all` phases into a single parallel batch, parallelized Manager non-dependent feeds alongside `teamEmployees` / indexed `$in` counts, and added strict `.select()` projections while maintaining exact numeric/structural parity across all 6 dashboard roles (`100%` deep equality verified before vs. after) and real-time freshness (Admin `-50.8%`, HR `-57.6%`, Payroll `-55.1%`, Employee ESS `-68.2%` local latency reduction).
+- **Lightweight Employee Options Endpoint ([`employeeRoutes.js`](server/src/modules/employees/employeeRoutes.js), [`employeeController.js`](server/src/modules/employees/employeeController.js)):** Added `GET /api/v1/employees/options` (registered before `/:id`) returning strictly `_id`, `employeeId`, `firstName`, `lastName`, and `email` with zero `.populate()` calls and zero PII/bank/address exposure. Supports `search`, `departmentId`, `branchId`, `status`, `includeInactive`, and bounded pagination (`defaultLimit: 50`, `maxLimit: 200`); excludes soft-deleted and exited employees by default; mirrors `/employees` RBAC scope (`ADMIN`/`HR_MANAGER`/`PAYROLL_ADMIN` org-wide, `MANAGER` direct reports only, `EMPLOYEE`/`RECRUITER` blocked with `403`); cuts `limit=100` uncompressed payload by `87.6%` (`112,897 B -> 14,009 B`) and latency by `3.37x` (`36.93 ms -> 10.97 ms`), while preserving full backward compatibility for `GET /api/v1/employees`.
+
+### 2. Batch B Verification Results
+- **Backend Syntax Check (`server/src/**/*.js`, `server/tests/**/*.js`)**: `113` files checked, `0` errors.
+- **Backend Test Suite (`cd server; npm test`)**: **8 files, 81 passed, 0 failed, 0 skipped** (includes new [`tests/phase8BatchB.test.js`](server/tests/phase8BatchB.test.js) covering dashboard parity/isolation/freshness, `/employees/options` RBAC/filters/projections, `/employees` backward compatibility, explain plan `IXSCAN` verification, and reversible index migration rollback/reapply).
+- **Frontend Test Suite (`cd client; npm test`)**: **6 files, 40 passed, 0 failed, 0 skipped**.
+- **Frontend Production Build (`cd client; npm run build`)**: Vite production build succeeded (`2110 modules`, `0` errors).
+- **Live DB Safety**: `SYNC_INDEXES` confirmed `'false'`; live MongoDB Atlas `pr_vision_hrms` untouched; `server/uploads/` empty (`0` files).
+
+---
+
+## Phase 8 — Batch C: Frontend API Adoption & End-to-End Verification (Completed)
+
+> [!NOTE]
+> Implemented **Phase 8 Batch C** adopting `GET /api/v1/employees/options` safely across the 4 dropdown-only consumer modules while preserving RBAC, backward compatibility, request deduplication/cancellation, and zero production Atlas or configuration edits. Interactive Chrome DevTools verification remained **Pending** due to unavailable Chrome remote debugging (`DevToolsActivePort` `ENOENT`). Complete findings and measurements: [`server/docs/PHASE8_BATCH_C_REPORT.md`](server/docs/PHASE8_BATCH_C_REPORT.md).
+
+### 1. Summary of Changes
+- **Reusable Options Hook & Picker ([`useEmployeeOptions.js`](client/src/hooks/useEmployeeOptions.js), [`EmployeeOptionPicker.jsx`](client/src/components/common/EmployeeOptionPicker.jsx)):** Built shared hook & accessible single/multi selector with debounced server search (`250 ms`), `Load more` pagination (`limit: 20`), `AbortController` cancellation, sequence-number stale-response protection, loading/empty/error/retry states, `queryCache` `60s` caching/tag invalidation, and selection label preservation across search/pagination/reopen.
+- **Migrated Dropdown Consumers:**
+  - [`AssetsPage.jsx`](client/src/pages/assets/AssetsPage.jsx), [`DocumentsPage.jsx`](client/src/pages/documents/DocumentsPage.jsx), [`PerformancePage.jsx`](client/src/pages/performance/PerformancePage.jsx), [`TrainingPage.jsx`](client/src/pages/training/TrainingPage.jsx): Eliminated eager `GET /employees?limit=100` calls on mount (`0` employee requests while browsing tables/lists) and loaded lightweight options lazily only when opening Assign / Upload / Initiate / Enroll modals (`112,388 B -> 2,801 B` raw JSON, **`-97.5%`**; `3,700 B -> 499 B` gzip, **`-86.5%`**; `45.27 ms -> 11.36 ms`, **`3.99x faster`** on page 1).
+- **Intentionally Retained on Full `/employees`:** [`EmployeesPage.jsx`](client/src/pages/employees/EmployeesPage.jsx) stays on `GET /api/v1/employees?limit=100` because its directory table and edit workflows require populated department/designation/branch/manager/shift/user metadata.
+
+### 2. Batch C Verification Results
+- **Backend Syntax Check (`server/src/**/*.js`, `server/tests/**/*.js`)**: `114` files checked, `0` errors.
+- **Backend Test Suite (`cd server; npm test`)**: **9 files, 83 passed, 0 failed, 0 skipped** (includes new [`tests/phase8BatchC.test.js`](server/tests/phase8BatchC.test.js)).
+- **Frontend Test Suite (`cd client; npm test`)**: **7 files, 46 passed, 0 failed, 0 skipped** (includes new [`src/__tests__/phase8BatchC.test.jsx`](client/src/__tests__/phase8BatchC.test.jsx) + lazy modal await in [`phase6WorkflowIntegration.test.jsx`](client/src/__tests__/phase6WorkflowIntegration.test.jsx)).
+- **Frontend Production Build (`cd client; npm run build`)**: Vite production build succeeded (`2112` modules transformed, `0` errors).
+- **Live DB & Environment Safety**: `SYNC_INDEXES` confirmed `'false'`, `autoIndex` disabled in non-test startup, Batch B index migration not executed, `.env` and `package.json` unmodified, live Atlas `pr_vision_hrms` untouched, and `server/uploads/` empty (`0` files).
+
+---
+
+## Phase 8 — Batch D & Final Consolidated System Audit, Hardening & Release Readiness (Completed)
+
+> [!NOTE]
+> Completed **Phase 8 Batch D & Final Consolidated Project Audit**: resolved the Manager training self-enrollment scope discrepancy, hardened request input sanitization against NoSQL `$`-operator and prototype-pollution payloads, validated ObjectId query filters and notification ownership, aligned frontend RBAC controls (`ShiftsPage`, `ReportsPage`, `GrievancesPage`, `DashboardPage`), verified streaming compression and Batch B 38-index reversible migration on isolated `MongoMemoryServer`, audited single-tenant vs. multi-tenant readiness across all `31` Mongoose models, and produced [`server/docs/PR_VISION_HRMS_FINAL_AUDIT_REPORT.md`](server/docs/PR_VISION_HRMS_FINAL_AUDIT_REPORT.md), [`server/docs/PR_VISION_HRMS_MANUAL_TESTING_CHECKLIST.md`](server/docs/PR_VISION_HRMS_MANUAL_TESTING_CHECKLIST.md), and [`server/docs/PHASE8_FINAL_RELEASE_READINESS_REPORT.md`](server/docs/PHASE8_FINAL_RELEASE_READINESS_REPORT.md).
+
+### 1. Summary of Changes
+- **Manager Training Self-Enrollment Compatibility ([`employeeController.js`](server/src/modules/employees/employeeController.js), [`trainingController.js`](server/src/modules/training/trainingController.js), [`useEmployeeOptions.js`](client/src/hooks/useEmployeeOptions.js), [`TrainingPage.jsx`](client/src/pages/training/TrainingPage.jsx)):** Added explicit opt-in `?includeSelf=true` support on `GET /api/v1/employees/options` for `ROLES.MANAGER` (`$or: [{ managerId: req.verifiedEmployeeId }, { _id: req.verifiedEmployeeId }]` intersected safely with `search` via `$and`), passed `includeSelf: true` exclusively in `TrainingPage.jsx` while keeping `AssetsPage.jsx`, `DocumentsPage.jsx`, `PerformancePage.jsx`, and `GET /api/v1/employees` strictly direct-reports-only, and hardened `assignTraining` to verify all submitted `employeeIds` correspond to active (`isDeleted: false`) employee records.
+- **NoSQL Operator Stripping, Filter Validation & Notification Ownership ([`securityUtils.js`](server/src/utils/securityUtils.js), [`app.js`](server/src/app.js), [`departmentController.js`](server/src/modules/departments/departmentController.js), [`attendanceController.js`](server/src/modules/attendance/attendanceController.js), [`recruitmentController.js`](server/src/modules/recruitment/recruitmentController.js), [`reportController.js`](server/src/modules/reports/reportController.js), [`notificationController.js`](server/src/modules/notifications/notificationController.js)):** Added `sanitizeRequestInputs` (`stripUnsafeKeys`) middleware stripping `$`-prefixed and `__proto__`/`constructor`/`prototype` keys across `req.body`, `req.query`, and `req.params`, added explicit `isValidObjectId` checks on `departmentId` and `branchId` query filters, and hardened `PATCH /api/v1/notifications/:id/read` with `isValidObjectId(id)` (`400`) and ownership/existence (`404`) verification.
+- **Frontend Role Visibility Alignment ([`ShiftsPage.jsx`](client/src/pages/shifts/ShiftsPage.jsx), [`ReportsPage.jsx`](client/src/pages/reports/ReportsPage.jsx), [`GrievancesPage.jsx`](client/src/pages/grievances/GrievancesPage.jsx), [`DashboardPage.jsx`](client/src/pages/dashboard/DashboardPage.jsx)):** Gated shift creation/edit/archive controls to `SUPER_ADMIN`/`ADMIN`/`HR_MANAGER`, hid the `Payroll` report tab for `MANAGER` on `ReportsPage`, and included `SUPER_ADMIN` (plus assigned non-confidential `MANAGER` on grievances) in `DashboardPage` and `GrievancesPage`.
+- **Parallel Test Isolation Fix ([`compressionMiddleware.test.js`](server/tests/compressionMiddleware.test.js), [`phase8BatchA.test.js`](server/tests/phase8BatchA.test.js), [`phase8BatchA.test.jsx`](client/src/__tests__/phase8BatchA.test.jsx)):** Prevented cross-worker `UPLOAD_ROOT` cleanup races during parallel static download tests and increased lazy Recharts render timeout under multi-worker CPU load.
+
+### 2. Final Verification & Release Readiness Status
+- **Backend Syntax Check (`server/src/**/*.js`, `server/tests/**/*.js`)**: `115` files checked, `0` errors (**PASS**).
+- **Backend Test Suite (`cd server; npm test`)**: **10 files, 88 passed, 0 failed, 0 skipped** — includes new [`tests/phase8BatchD.test.js`](server/tests/phase8BatchD.test.js) (**PASS**).
+- **Frontend Test Suite (`cd client; npm test`)**: **8 files, 49 passed, 0 failed, 0 skipped** — includes new [`src/__tests__/phase8BatchD.test.jsx`](client/src/__tests__/phase8BatchD.test.jsx) (**PASS**).
+- **Frontend Production Build (`cd client; npm run build`)**: `2112` modules transformed in `17.89s` (**PASS**).
+- **Index Migration Dry-Run (`migrateIndexesBatchB.js` UP & DOWN)**: `38` planned additive indexes and `19` manual cleanup candidates verified in dry-run and isolated `MongoMemoryServer` `apply -> rollback -> reapply` cycle (**PASS**; production Atlas rollout **PENDING** DBA window).
+- **Browser UI Verification & Manual Testing Checklist**: **PENDING** (`DevToolsActivePort` `ENOENT`, no local Playwright/Puppeteer/WebDriver installed; documented with 22-scenario checklist and verified 7-role x 18-endpoint live HTTP matrix in [`server/docs/PR_VISION_HRMS_MANUAL_TESTING_CHECKLIST.md`](server/docs/PR_VISION_HRMS_MANUAL_TESTING_CHECKLIST.md)).
+- **Independent Payroll & Post-Lock Adjustment Verification**: **PASS** (`4` deterministic employee profiles + paid-run lock immutability + approved unpaid leave cancellation `CREDIT` adjustment settlement verified rupee-for-rupee in [`server/docs/PR_VISION_HRMS_FINAL_AUDIT_REPORT.md`](server/docs/PR_VISION_HRMS_FINAL_AUDIT_REPORT.md#L107-L135)).
+- **Tenant Isolation Assessment**: **PASS WITH LIMITATIONS** for single-tenant `pr_vision_hrms`; **BLOCKED** for multi-tenant SaaS (`1/31` models [`UserSession`] has `tenantId`; `30/31` models require future tenant schema migration).
+- **Final Release Decision**: **`READY FOR SINGLE-ORGANIZATION PRODUCTION AFTER EXPLICIT APPROVAL`** (immediately **`READY FOR SINGLE-ORGANIZATION STAGING`**; **`NOT READY`** for multi-organization shared-DB SaaS).
+

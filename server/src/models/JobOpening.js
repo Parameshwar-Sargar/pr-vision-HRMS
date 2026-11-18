@@ -65,5 +65,8 @@ const jobOpeningSchema = new mongoose.Schema(
 
 jobOpeningSchema.index({ status: 1 });
 jobOpeningSchema.index({ departmentId: 1 });
+jobOpeningSchema.index({ createdAt: -1 });
+jobOpeningSchema.index({ status: 1, createdAt: -1 });
+jobOpeningSchema.index({ departmentId: 1, createdAt: -1 });
 
 export default mongoose.model('JobOpening', jobOpeningSchema);

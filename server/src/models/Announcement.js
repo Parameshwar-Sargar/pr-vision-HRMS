@@ -58,5 +58,7 @@ announcementSchema.virtual('content').get(function () {
 });
 
 announcementSchema.index({ createdAt: -1 });
+announcementSchema.index({ isActive: 1, isPinned: -1, createdAt: -1 });
+announcementSchema.index({ isPinned: -1, createdAt: -1 });
 
 export default mongoose.model('Announcement', announcementSchema);

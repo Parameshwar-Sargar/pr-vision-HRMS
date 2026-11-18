@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import Attendance from '../../models/Attendance.js';
 import Employee from '../../models/Employee.js';
+import Shift from '../../models/Shift.js';
+import CompanySettings from '../../models/CompanySettings.js';
 import { ATTENDANCE_STATUS, ROLES } from '../../config/constants.js';
 import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../../utils/responseUtils.js';
 import { isAdminOrHR, isValidObjectId } from '../../utils/securityUtils.js';
@@ -18,6 +20,35 @@ const getDayBoundary = (d = new Date()) => {
   return { start, end };
 };
 
+const resolveShiftForEmployee = async (employee) => {
+  if (employee?.shiftId && employee.shiftId.startTime) {
+    return employee.shiftId;
+  }
+  const defaultShift = await Shift.findOne({ isActive: true, isDefault: true })
+    .select('startTime endTime gracePeriodMinutes breakDurationMinutes isNightShift')
+    .lean();
+  if (defaultShift) return defaultShift;
+  return Shift.findOne({ isActive: true })
+    .sort({ createdAt: 1 })
+    .select('startTime endTime gracePeriodMinutes breakDurationMinutes isNightShift')
+    .lean();
+};
+
+const calculateStandardHours = (shift, settings) => {
+  if (shift?.startTime && shift?.endTime) {
+    const [sh, sm] = String(shift.startTime).split(':').map(Number);
+    const [eh, em] = String(shift.endTime).split(':').map(Number);
+    if (!Number.isNaN(sh) && !Number.isNaN(sm) && !Number.isNaN(eh) && !Number.isNaN(em)) {
+      const startMins = sh * 60 + sm;
+      let endMins = eh * 60 + em;
+      if (endMins <= startMins) endMins += 24 * 60;
+      const netMins = Math.max(60, endMins - startMins - (shift.breakDurationMinutes || 0));
+      return Math.round((netMins / 60) * 10) / 10;
+    }
+  }
+  return Number(settings?.settings?.standardWorkHoursPerDay) || 8;
+};
+
 export const checkIn = async (req, res, next) => {
   try {
     if (!req.verifiedEmployeeId) {
@@ -25,7 +56,7 @@ export const checkIn = async (req, res, next) => {
     }
     const employee = await Employee.findOne({ _id: req.verifiedEmployeeId, isDeleted: false })
       .select('_id firstName lastName employeeId departmentId branchId shiftId')
-      .populate('shiftId', 'startTime gracePeriodMinutes')
+      .populate('shiftId', 'startTime endTime gracePeriodMinutes breakDurationMinutes isNightShift')
       .lean();
 
     if (!employee) {
@@ -44,11 +75,15 @@ export const checkIn = async (req, res, next) => {
       return sendError(res, 'You have already checked in for today.', [], 400);
     }
 
+    const activeShift = await resolveShiftForEmployee(employee);
     let status = ATTENDANCE_STATUS.PRESENT;
-    if (employee.shiftId && employee.shiftId.startTime) {
-      const [shiftHour, shiftMinute] = employee.shiftId.startTime.split(':').map(Number);
+    if (activeShift && activeShift.startTime) {
+      const [shiftHour, shiftMinute] = activeShift.startTime.split(':').map(Number);
       const shiftStartTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), shiftHour, shiftMinute, 0);
-      const gracePeriodMs = (employee.shiftId.gracePeriodMinutes || 15) * 60 * 1000;
+      if (activeShift.isNightShift && shiftHour >= 12 && now.getHours() < 12) {
+        shiftStartTime.setDate(shiftStartTime.getDate() - 1);
+      }
+      const gracePeriodMs = (activeShift.gracePeriodMinutes ?? 15) * 60 * 1000;
 
       if (now.getTime() > shiftStartTime.getTime() + gracePeriodMs) {
         status = ATTENDANCE_STATUS.LATE;
@@ -61,7 +96,7 @@ export const checkIn = async (req, res, next) => {
         date: start,
         checkInTime: now,
         status,
-        shiftId: employee.shiftId?._id || null,
+        shiftId: activeShift?._id || employee.shiftId?._id || null,
         branchId: employee.branchId || null,
         clockMethod: 'Web',
         ipAddress: req.ip,
@@ -69,6 +104,7 @@ export const checkIn = async (req, res, next) => {
     } else {
       record.checkInTime = now;
       record.status = status;
+      record.shiftId = record.shiftId || activeShift?._id || employee.shiftId?._id || null;
       await record.save();
     }
 
@@ -86,6 +122,9 @@ export const checkIn = async (req, res, next) => {
 
     return sendSuccess(res, `Check-in recorded at ${now.toLocaleTimeString()}`, { record: populatedRecord });
   } catch (error) {
+    if (error?.code === 11000) {
+      return sendError(res, 'You have already checked in for today.', [], 400);
+    }
     next(error);
   }
 };
@@ -95,9 +134,13 @@ export const checkOut = async (req, res, next) => {
     if (!req.verifiedEmployeeId) {
       return sendError(res, 'No active employee profile linked to your user account.', [], 403);
     }
-    const employee = await Employee.findOne({ _id: req.verifiedEmployeeId, isDeleted: false })
-      .select('_id firstName lastName employeeId departmentId branchId')
-      .lean();
+    const [employee, settings] = await Promise.all([
+      Employee.findOne({ _id: req.verifiedEmployeeId, isDeleted: false })
+        .select('_id firstName lastName employeeId departmentId branchId shiftId')
+        .populate('shiftId', 'startTime endTime gracePeriodMinutes breakDurationMinutes isNightShift')
+        .lean(),
+      CompanySettings.findOne().select('settings.standardWorkHoursPerDay').lean(),
+    ]);
 
     if (!employee) {
       return sendError(res, 'No active employee profile linked to your user account.', [], 403);
@@ -109,7 +152,7 @@ export const checkOut = async (req, res, next) => {
     const record = await Attendance.findOne({
       employeeId: employee._id,
       date: { $gte: start, $lte: end },
-    });
+    }).populate('shiftId', 'startTime endTime gracePeriodMinutes breakDurationMinutes isNightShift');
 
     if (!record || !record.checkInTime) {
       return sendError(res, 'You must check in before checking out.', [], 400);
@@ -121,16 +164,20 @@ export const checkOut = async (req, res, next) => {
 
     record.checkOutTime = now;
 
-    const diffMs = record.checkOutTime.getTime() - record.checkInTime.getTime();
+    const diffMs = Math.max(0, record.checkOutTime.getTime() - record.checkInTime.getTime());
     const totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10;
     record.totalHours = totalHours;
 
-    const standardHours = 8;
-    if (totalHours > standardHours) {
-      record.overtimeHours = Math.round((totalHours - standardHours) * 10) / 10;
-    }
+    const activeShift =
+      record.shiftId && record.shiftId.startTime
+        ? record.shiftId
+        : await resolveShiftForEmployee(employee);
+    const standardHours = calculateStandardHours(activeShift, settings);
 
-    if (totalHours < 4) {
+    record.overtimeHours =
+      totalHours > standardHours ? Math.round((totalHours - standardHours) * 10) / 10 : 0;
+
+    if (totalHours < Math.min(4, standardHours / 2)) {
       record.status = ATTENDANCE_STATUS.HALF_DAY;
     }
 
@@ -203,7 +250,12 @@ export const getAttendance = async (req, res, next) => {
       query.employeeId = req.verifiedEmployeeId;
     }
 
-    if (branchId) query.branchId = branchId;
+    if (branchId) {
+      if (!isValidObjectId(branchId)) {
+        return sendError(res, 'Invalid branch ID format.', [], 400);
+      }
+      query.branchId = branchId;
+    }
 
     if (startDate && endDate) {
       query.date = {
@@ -363,21 +415,70 @@ export const adjustAttendance = async (req, res, next) => {
     if (!isValidObjectId(id)) {
       return sendError(res, 'Invalid attendance record ID.', [], 400);
     }
-    const { checkInTime, checkOutTime, status, notes } = req.body;
+    const { checkInTime, checkOutTime, status, notes, correctionStatus } = req.body;
 
-    const record = await Attendance.findById(id);
+    if (status && !Object.values(ATTENDANCE_STATUS).includes(status)) {
+      return sendError(res, 'Invalid attendance status.', [], 400);
+    }
+
+    const record = await Attendance.findById(id).populate(
+      'shiftId',
+      'startTime endTime gracePeriodMinutes breakDurationMinutes isNightShift'
+    );
     if (!record) {
       return sendError(res, 'Attendance record not found.', [], 404);
     }
 
-    if (checkInTime) record.checkInTime = new Date(checkInTime);
-    if (checkOutTime) record.checkOutTime = new Date(checkOutTime);
+    if (checkInTime) {
+      const parsedIn = new Date(checkInTime);
+      if (Number.isNaN(parsedIn.getTime())) {
+        return sendError(res, 'Invalid check-in time format.', [], 400);
+      }
+      record.checkInTime = parsedIn;
+    }
+    if (checkOutTime) {
+      const parsedOut = new Date(checkOutTime);
+      if (Number.isNaN(parsedOut.getTime())) {
+        return sendError(res, 'Invalid check-out time format.', [], 400);
+      }
+      record.checkOutTime = parsedOut;
+    }
+    if (record.checkInTime && record.checkOutTime && record.checkOutTime < record.checkInTime) {
+      return sendError(res, 'Check-out time cannot be earlier than check-in time.', [], 400);
+    }
+
     if (status) record.status = status;
     if (notes !== undefined) record.notes = String(notes);
 
     if (record.checkInTime && record.checkOutTime) {
+      const [employee, settings] = await Promise.all([
+        Employee.findById(record.employeeId)
+          .select('shiftId')
+          .populate('shiftId', 'startTime endTime gracePeriodMinutes breakDurationMinutes isNightShift')
+          .lean(),
+        CompanySettings.findOne().select('settings.standardWorkHoursPerDay').lean(),
+      ]);
+      const activeShift =
+        record.shiftId && record.shiftId.startTime
+          ? record.shiftId
+          : await resolveShiftForEmployee(employee);
+      const standardHours = calculateStandardHours(activeShift, settings);
+
       const diffMs = record.checkOutTime.getTime() - record.checkInTime.getTime();
-      record.totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10;
+      const totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10;
+      record.totalHours = totalHours;
+      record.overtimeHours =
+        totalHours > standardHours ? Math.round((totalHours - standardHours) * 10) / 10 : 0;
+    }
+
+    if (record.correctionRequest?.isRequested) {
+      if (correctionStatus === 'Rejected' || correctionStatus === 'Approved') {
+        record.correctionRequest.status = correctionStatus;
+        record.correctionRequest.reviewedBy = req.user._id;
+      } else if (record.correctionRequest.status === 'Pending') {
+        record.correctionRequest.status = 'Approved';
+        record.correctionRequest.reviewedBy = req.user._id;
+      }
     }
 
     record.clockMethod = 'Manual';
@@ -398,6 +499,18 @@ export const submitCorrectionRequest = async (req, res, next) => {
 
     const validated = correctionRequestSchema.parse(req.body);
 
+    const parsedCheckIn = validated.requestedCheckIn ? new Date(validated.requestedCheckIn) : undefined;
+    const parsedCheckOut = validated.requestedCheckOut ? new Date(validated.requestedCheckOut) : undefined;
+    if (parsedCheckIn && Number.isNaN(parsedCheckIn.getTime())) {
+      return sendError(res, 'Invalid requested check-in time.', [], 400);
+    }
+    if (parsedCheckOut && Number.isNaN(parsedCheckOut.getTime())) {
+      return sendError(res, 'Invalid requested check-out time.', [], 400);
+    }
+    if (parsedCheckIn && parsedCheckOut && parsedCheckOut < parsedCheckIn) {
+      return sendError(res, 'Requested check-out time cannot be earlier than requested check-in time.', [], 400);
+    }
+
     const record = await Attendance.findById(id);
     if (!record) {
       return sendError(res, 'Attendance record not found.', [], 404);
@@ -416,8 +529,8 @@ export const submitCorrectionRequest = async (req, res, next) => {
 
     record.correctionRequest = {
       isRequested: true,
-      requestedCheckIn: validated.requestedCheckIn ? new Date(validated.requestedCheckIn) : undefined,
-      requestedCheckOut: validated.requestedCheckOut ? new Date(validated.requestedCheckOut) : undefined,
+      requestedCheckIn: parsedCheckIn,
+      requestedCheckOut: parsedCheckOut,
       reason: validated.reason,
       status: 'Pending',
     };

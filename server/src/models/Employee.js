@@ -189,5 +189,9 @@ employeeSchema.index({ createdAt: -1 });
 employeeSchema.index({ isDeleted: 1, employmentStatus: 1 });
 employeeSchema.index({ isDeleted: 1, departmentId: 1 });
 employeeSchema.index({ isDeleted: 1, managerId: 1 });
+employeeSchema.index({ isDeleted: 1, createdAt: -1 });
+employeeSchema.index({ isDeleted: 1, departmentId: 1, createdAt: -1 });
+employeeSchema.index({ isDeleted: 1, employmentStatus: 1, createdAt: -1 });
+employeeSchema.index({ isDeleted: 1, firstName: 1, lastName: 1, employeeId: 1 });
 
 export default mongoose.model('Employee', employeeSchema);

@@ -117,21 +117,22 @@ export const submitExpenseClaim = async (req, res, next) => {
 
     const validated = expenseClaimSchema.parse(req.body);
 
+    const claimDate = validated.date ? new Date(validated.date) : new Date();
+    if (Number.isNaN(claimDate.getTime())) {
+      if (req.file) safeDeleteFile(req.file.path);
+      return sendError(res, 'Invalid expense date.', [], 400);
+    }
+
     const claim = await ExpenseClaim.create({
       employeeId: req.verifiedEmployeeId,
       title: validated.title,
       category: validated.category,
       amount: validated.amount,
-      date: new Date(validated.date || Date.now()),
+      date: claimDate,
       description: validated.description || '',
-      receiptUrl: req.file ? req.file.filename : '',
+      receiptUrl: req.file ? `receipt:${req.file.filename}` : '',
       status: 'Pending',
     });
-
-    if (req.file) {
-      claim.receiptUrl = `receipt:${req.file.filename}`;
-      await claim.save();
-    }
 
     await logAudit({
       req,
@@ -209,6 +210,10 @@ export const reviewExpenseClaim = async (req, res, next) => {
       return sendError(res, "Status must be 'Approved', 'Rejected', or 'Reimbursed'.", [], 400);
     }
 
+    if (status === 'Reimbursed' && !isPayrollPrivileged(req.user.role)) {
+      return sendError(res, 'Access denied: Only Payroll Admin, HR Manager, or Admin can mark expenses as reimbursed.', [], 403);
+    }
+
     const claim = await ExpenseClaim.findById(id);
     if (!claim) return sendError(res, 'Expense claim not found.', [], 404);
 
@@ -228,6 +233,16 @@ export const reviewExpenseClaim = async (req, res, next) => {
       }
     } else if (!isAdminOrHR(req.user.role) && req.verifiedEmployeeId && claim.employeeId.toString() === req.verifiedEmployeeId.toString()) {
       return sendError(res, 'Access denied: You cannot approve or reimburse your own expense claim.', [], 403);
+    }
+
+    if (['Rejected', 'Reimbursed'].includes(claim.status)) {
+      return sendError(res, `Expense claim is already ${claim.status.toLowerCase()} and cannot be modified.`, [], 400);
+    }
+    if (status === 'Reimbursed' && claim.status !== 'Approved') {
+      return sendError(res, 'Only Approved expense claims can be marked as Reimbursed.', [], 400);
+    }
+    if (status !== 'Reimbursed' && claim.status !== 'Pending') {
+      return sendError(res, 'Only Pending expense claims can be Approved or Rejected.', [], 400);
     }
 
     claim.status = status;

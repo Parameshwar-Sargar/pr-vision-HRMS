@@ -25,7 +25,7 @@ export default function Sidebar({ isOpen, onClose }) {
   const { user } = useSelector((state) => state.auth);
 
   const role = user?.role || 'EMPLOYEE';
-  const isAdmin = role === 'ADMIN';
+  const isAdmin = role === 'ADMIN' || role === 'SUPER_ADMIN';
   const isHR = role === 'HR_MANAGER';
   const isManager = role === 'MANAGER';
   const isEmployee = role === 'EMPLOYEE';

@@ -60,6 +60,25 @@ const leaveRequestSchema = new mongoose.Schema(
     reviewedAt: {
       type: Date,
     },
+    cancellationReason: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    cancelledBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+    cancelledFromStatus: {
+      type: String,
+      enum: [null, ...Object.values(LEAVE_STATUS)],
+      default: null,
+    },
   },
   {
     timestamps: true,

@@ -57,6 +57,16 @@ const candidateSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    interviewSchedule: {
+      scheduledAt: { type: Date, default: null },
+      interviewerName: { type: String, default: '' },
+      mode: {
+        type: String,
+        enum: ['Video', 'In-Person', 'Phone', 'Technical Round', 'HR Round'],
+        default: 'Video',
+      },
+      meetingLink: { type: String, default: '' },
+    },
     convertedToEmployeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Employee',
@@ -74,5 +84,9 @@ const candidateSchema = new mongoose.Schema(
 
 candidateSchema.index({ jobOpeningId: 1, status: 1 });
 candidateSchema.index({ email: 1 });
+candidateSchema.index({ appliedDate: -1 });
+candidateSchema.index({ status: 1, appliedDate: -1 });
+candidateSchema.index({ jobOpeningId: 1, appliedDate: -1 });
+candidateSchema.index({ jobOpeningId: 1, status: 1, appliedDate: -1 });
 
 export default mongoose.model('Candidate', candidateSchema);

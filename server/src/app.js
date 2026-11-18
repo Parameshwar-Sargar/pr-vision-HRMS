@@ -9,6 +9,8 @@ import { env } from './config/env.js';
 import { getDatabaseStatus, isDatabaseReady } from './config/db.js';
 import routes from './routes/index.js';
 import { errorHandler } from './middleware/errorMiddleware.js';
+import { createCompressionMiddleware } from './middleware/compressionMiddleware.js';
+import { sanitizeRequestInputs } from './utils/securityUtils.js';
 
 const app = express();
 
@@ -61,6 +63,7 @@ app.use('/api', limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser(env.COOKIE_SECRET));
+app.use(sanitizeRequestInputs);
 
 // Server-side execution timing header (X-Response-Time)
 app.use((req, res, next) => {
@@ -75,6 +78,9 @@ app.use((req, res, next) => {
   };
   next();
 });
+
+// Safe gzip response compression for compressible API JSON/text/CSV payloads (>= 1 KB)
+app.use(createCompressionMiddleware({ threshold: 1024 }));
 
 // Logger (Skip in test suite)
 if (env.NODE_ENV !== 'test') {

@@ -114,6 +114,25 @@ const masterDataSlice = createSlice({
       const id = action.payload;
       state.shifts = state.shifts.filter((s) => s._id !== id);
     },
+    addBranch: (state, action) => {
+      const branch = action.payload;
+      if (branch && !state.branches.some((b) => b._id === branch._id)) {
+        state.branches.push(branch);
+      }
+    },
+    updateBranch: (state, action) => {
+      const branch = action.payload;
+      if (branch) {
+        state.branches = state.branches.map((b) => {
+          if (b._id === branch._id) return { ...b, ...branch };
+          return branch.isHeadquarters ? { ...b, isHeadquarters: false } : b;
+        });
+      }
+    },
+    removeBranch: (state, action) => {
+      const id = action.payload;
+      state.branches = state.branches.filter((b) => b._id !== id);
+    },
     invalidateMasterData: (state) => {
       state.lastFetchedAt = null;
       state.isLoaded = false;
@@ -155,6 +174,9 @@ export const {
   addShift,
   updateShift,
   removeShift,
+  addBranch,
+  updateBranch,
+  removeBranch,
   invalidateMasterData,
   clearMasterData,
 } = masterDataSlice.actions;
